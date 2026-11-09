@@ -40,8 +40,9 @@ from ...preferences import options, save_options
 from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
 from ..store import Memory, PersonalizationUpgradeBlocked
-from ..timeline_view import PALETTE
+from ..category_palette import PALETTE, bootstrap_category_colors
 from .capture_sync import read_capture_state, repo_root
+from .categories import CategoriesPanel
 from .dialogs import ConfirmDialog, DetailDialog, FragmentDialog
 from .jobs import CaptureBridge, JobBridge
 from .theme import ACCENT, BG, BORDER, MUTED, NAV_ITEMS, SURFACE
@@ -207,7 +208,7 @@ class DiaryMainWindow(QMainWindow):
         self.settings_stack = QStackedWidget()
         self.settings_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.settings_tabs: dict[str, QPushButton] = {}
-        labels = ['我的日常', '当前项目', '识别与学习', '采集与隐私', '模型与高级']
+        labels = ['我的日常', '当前项目', '分类颜色', '识别与学习', '采集与隐私', '模型与高级']
         self.settings_pages: dict[str, QVBoxLayout] = {}
         for label in labels:
             btn = QPushButton(label)
@@ -315,11 +316,7 @@ class DiaryMainWindow(QMainWindow):
         save_d = QPushButton('保存个人档案')
         save_d.setObjectName('accent')
         save_d.clicked.connect(self.save_profile)
-        colors = QPushButton('分类颜色')
-        colors.setObjectName('ghost')
-        colors.clicked.connect(self.category_dialog)
         actions.addWidget(save_d)
-        actions.addWidget(colors)
         actions.addStretch()
         daily.addLayout(actions)
 
@@ -330,6 +327,11 @@ class DiaryMainWindow(QMainWindow):
         save_p.setObjectName('accent')
         save_p.clicked.connect(self.save_profile)
         projects.addWidget(save_p)
+
+        cats = self._settings_panel('分类颜色', '分类与颜色')
+        self.categories_panel = CategoriesPanel(self)
+        self.categories_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        cats.addWidget(self.categories_panel)
 
         learning = self._settings_panel('识别与学习', 'AI 与记忆')
         sub = QLabel('默认不联网；开启后在本窗口内分批整理新活动。')
@@ -492,7 +494,8 @@ class DiaryMainWindow(QMainWindow):
         def show(data):
             rows, items, profile, self.tasks, self.rules, config = data
             self.rows = {r['interval_id']: r for r in rows}
-            self.category_colors = config.get('category_colors', {})
+            activities = profile.get('activities') or list(DEFAULT_CATEGORIES)
+            self.category_colors = bootstrap_category_colors(self.database, activities)
             self.all_cards = items
             text = overview(items)
             if self.review_cache:
@@ -520,6 +523,10 @@ class DiaryMainWindow(QMainWindow):
                     self.endpoint.setText(config['ai_endpoint'])
                 if config.get('ai_model'):
                     self.model.setText(config['ai_model'])
+            self.categories_panel.set_categories(
+                profile.get('activities') or list(DEFAULT_CATEGORIES),
+                self.category_colors,
+            )
 
         self.run_job(read, show, quiet=quiet)
 

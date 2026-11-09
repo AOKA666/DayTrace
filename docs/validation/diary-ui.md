@@ -13,7 +13,9 @@
 - **壳层**：Qt 窄侧栏导航（圆角选中态）；顶栏日期胶囊、筛选、待确认、记录状态。
 - **时间线**：**扁=矮行高**（`pitch` 约 **100px**），卡片横向仍铺满主内容区；长标题/描述 Elide；`TimelineWidget` + `QPainter` 虚拟绘制。
 - **设置**：标签下可滚动内容区（外边距约 20–28px）；**勿**对 `body` 设 `AlignTop`（会阻止子项横向 Expanding）；`settingsPanel` 无 max-width、`Expanding/Preferred`，底部 `addStretch` 收空白；字段随面板伸展。
-- **设置**：五分区横向标签 + `QStackedWidget` 滚动表单。
+- **分类颜色**：设置 → **分类颜色** 标签；名称 + 色板/`QColorDialog`；持久化 `preferences.category_colors` 与个人档案 `activities`；默认 `DEFAULT_CATEGORY_COLORS` 首次补齐。
+- **时间线标签**：分类以色块 chip 展示（分类色底 + `contrasting_text` 字色）；「待确认」用暖色中性 chip。
+- **设置**：六分区横向标签 + `QStackedWidget` 滚动表单。
 - **字体**：Segoe UI + Microsoft YaHei UI（Qt 回退 sans-serif）。
 - **详情/确认**：`QDialog` 圆角控件，证据 `QTextEdit` 只读。
 

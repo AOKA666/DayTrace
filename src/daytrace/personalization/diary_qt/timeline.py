@@ -23,7 +23,7 @@ from .theme import (
     SHADOW,
     SURFACE,
 )
-from ..timeline_view import category_color
+from ..category_palette import category_color, contrasting_text
 
 
 class TimelineWidget(QWidget):
@@ -147,14 +147,21 @@ class TimelineWidget(QWidget):
             cx = left + 10
             category = card.get('category') or ''
             if category:
-                color = category_color(category, self.colors)
-                pill_w = min(96, 14 + len(category) * 11)
+                pending = category == '待确认'
+                if pending:
+                    bg, fg, border = PENDING_BG, PENDING_INK, PENDING_BORDER
+                else:
+                    bg = category_color(category, self.colors)
+                    fg = contrasting_text(bg)
+                    border = bg
+                label = category[:14]
+                pill_w = min(140, painter.fontMetrics().horizontalAdvance(label) + 18)
                 pill = QRectF(cx, foot, pill_w, 17)
-                painter.setPen(QPen(QColor(BORDER), 1))
-                painter.setBrush(QColor('#F4F6FA'))
-                painter.drawRoundedRect(pill, 6, 6)
-                painter.setPen(QColor(color))
-                painter.drawText(pill.adjusted(8, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, category[:12])
+                painter.setPen(QPen(QColor(border), 1))
+                painter.setBrush(QColor(bg))
+                painter.drawRoundedRect(pill, 8, 8)
+                painter.setPen(QColor(fg))
+                painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, label)
                 cx += pill_w + 10
             if card.get('project'):
                 painter.setPen(QColor(FAINT))
