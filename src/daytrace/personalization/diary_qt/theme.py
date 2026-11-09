@@ -36,16 +36,27 @@ QScrollArea {{
 }}
 QScrollBar:vertical {{
     background: {BG};
-    width: 10px;
-    margin: 4px;
+    width: 12px;
+    margin: 2px 2px 2px 0;
 }}
 QScrollBar::handle:vertical {{
-    background: {SHADOW};
-    border-radius: 5px;
-    min-height: 40px;
+    background: #C5CCD6;
+    border-radius: 6px;
+    min-height: 48px;
+    margin: 2px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: #9AA3B2;
+}}
+QScrollBar::handle:vertical:pressed {{
+    background: #7E8898;
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
+    border: none;
+}}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: none;
 }}
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {{
     background: {SURFACE};

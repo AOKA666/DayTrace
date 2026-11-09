@@ -11,7 +11,8 @@
 设计 token：`diary_theme.py`（与 Qt 共用）+ `diary_qt/theme.py`（全局 QSS）。纸感底 `#F6F7F9`、圆角 **10–12px** 按钮/输入框、hover/pressed 分层；强调色 `#3B6FE8`；无玻璃拟态与大渐变。
 
 - **壳层**：Qt 窄侧栏导航（圆角选中态）；顶栏日期胶囊、筛选、待确认、记录状态。
-- **时间线**：**扁=矮行高**（`pitch` 约 **100px**），卡片横向仍铺满主内容区；长标题/描述 Elide；`TimelineWidget` + `QPainter` 虚拟绘制。
+- **时间线**：对标「时间日志」日记卡片——左起止时间、中 **醒目时长** + 标题/备注、右上 **分类色块**；`pitch` 约 **104px**，扁行高、横向铺满。展示前 `compact_cards` 合并同窗口短间隔（默认 **180s**）并折叠短空隙（默认 **120s**），减少碎卡与「未记录」刷屏。
+- **滚动条**：时间线/设置 `QScrollArea` 使用系统纵向滑块；时间线画布 `wheelEvent` 交给父级滚动；滑块加宽至 **12px**、最小把手 **48px**，可点击拖拽。
 - **设置**：标签下可滚动内容区（外边距约 20–28px）；**勿**对 `body` 设 `AlignTop`（会阻止子项横向 Expanding）；`settingsPanel` 无 max-width、`Expanding/Preferred`，底部 `addStretch` 收空白；字段随面板伸展。
 - **分类颜色**：设置 → **分类颜色** 标签；名称 + 色板/`QColorDialog`；持久化 `preferences.category_colors` 与个人档案 `activities`；默认 `DEFAULT_CATEGORY_COLORS` 首次补齐。
 - **时间线标签**：分类以色块 chip 展示（分类色底 + `contrasting_text` 字色）；「待确认」用暖色中性 chip。

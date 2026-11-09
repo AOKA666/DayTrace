@@ -34,9 +34,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..classifier import Classifier
-from ..diary_model import DEFAULT_CATEGORIES, cards, overview
+from ..diary_model import DEFAULT_CATEGORIES, cards, compact_cards, overview
 from ..diary_worker import review, tick
-from ...preferences import options, save_options
+from ...preferences import diary_gap_ms, options, save_options
 from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
 from ..store import Memory, PersonalizationUpgradeBlocked
@@ -193,6 +193,8 @@ class DiaryMainWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.timeline = TimelineWidget()
         scroll.setWidget(self.timeline)
         tl.addWidget(scroll, stretch=1)
@@ -220,6 +222,7 @@ class DiaryMainWindow(QMainWindow):
             scroll_s = QScrollArea()
             scroll_s.setWidgetResizable(True)
             scroll_s.setFrameShape(QFrame.Shape.NoFrame)
+            scroll_s.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             scroll_s.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             inner = QWidget()
             body = QVBoxLayout(inner)
@@ -381,6 +384,17 @@ class DiaryMainWindow(QMainWindow):
         self.capture_enabled = QCheckBox('开启本地截图证据')
         self.capture_enabled.toggled.connect(self.save_screenshots)
         privacy.addWidget(self.capture_enabled)
+        privacy.addSpacing(8)
+        privacy.addWidget(QLabel('日记合并间隔（秒）'))
+        self.merge_gap = QLineEdit('180')
+        self.merge_gap.setObjectName('settingsField')
+        self.merge_gap.setMaximumWidth(88)
+        privacy.addWidget(self.merge_gap)
+        privacy.addWidget(QLabel('折叠短空隙（秒）'))
+        self.fold_gap = QLineEdit('120')
+        self.fold_gap.setObjectName('settingsField')
+        self.fold_gap.setMaximumWidth(88)
+        privacy.addWidget(self.fold_gap)
 
         advanced = self._settings_panel('模型与高级', '模型连接')
         adv = QLabel('密钥仅存于 Windows Credential Manager。')
@@ -489,7 +503,9 @@ class DiaryMainWindow(QMainWindow):
 
         def read(memory):
             rows = [dict(r, start_ms=max(start, r['start_ms']), end_ms=min(end, r['end_ms'])) for r in memory.timeline(start, end)]
-            return rows, cards(rows), memory.profile(), memory.tasks(), memory.rules(), options(self.database)
+            merge_ms, fold_ms = diary_gap_ms(self.database)
+            items = compact_cards(cards(rows), merge_ms, fold_ms)
+            return rows, items, memory.profile(), memory.tasks(), memory.rules(), options(self.database)
 
         def show(data):
             rows, items, profile, self.tasks, self.rules, config = data
@@ -517,6 +533,8 @@ class DiaryMainWindow(QMainWindow):
                     profile = dict(profile, activities=list(DEFAULT_CATEGORIES))
                 self.fill_profile(profile)
                 self.dwell.setText(str(config.get('min_dwell_seconds', 5)))
+                self.merge_gap.setText(str(config.get('diary_merge_gap_seconds', 180)))
+                self.fold_gap.setText(str(config.get('diary_fold_gap_seconds', 120)))
                 self.capture_enabled.setChecked(config.get('screenshots_enabled') is True)
                 self.auto_ai.setChecked(config.get('auto_ai') is True)
                 if config.get('ai_endpoint'):
@@ -622,7 +640,15 @@ class DiaryMainWindow(QMainWindow):
     def save_capture_preferences(self):
         from ...preferences import save_dwell
 
-        self.run_job(lambda m: save_dwell(self.database, self.dwell.text()))
+        def work(_memory):
+            save_dwell(self.database, self.dwell.text())
+            save_options(
+                self.database,
+                diary_merge_gap_seconds=int(self.merge_gap.text().strip() or 180),
+                diary_fold_gap_seconds=int(self.fold_gap.text().strip() or 120),
+            )
+
+        self.run_job(work, lambda _: self.refresh())
 
     def save_screenshots(self):
         self.run_job(lambda m: save_options(self.database, screenshots_enabled=self.capture_enabled.isChecked()))

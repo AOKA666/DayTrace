@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 import unittest
 
-from daytrace.personalization.diary_model import cards, overview
+from daytrace.personalization.diary_model import cards, compact_cards, overview
 
 
 def _row(**overrides):
@@ -70,7 +70,37 @@ class DiaryModelTests(unittest.TestCase):
         self.assertEqual(items[0]['title'], 'DayTrace · README — Google Chrome')
         self.assertEqual(items[0]['category'], '待确认')
         self.assertTrue(items[0]['review'])
-        self.assertIn('窗口标题', items[0]['description'])
+        self.assertIn('前台窗口', items[0]['description'])
+
+    def test_compact_merges_same_window_with_short_gap(self):
+        rows = [
+            _row(interval_id='a', start_ms=0, end_ms=60_000, title='VS Code', label='', category='', task_id=None),
+            _row(interval_id='b', start_ms=150_000, end_ms=240_000, title='VS Code', label='', category='', task_id=None),
+        ]
+        merged = compact_cards(cards(rows), merge_gap_ms=180_000)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(len(merged[0]['rows']), 2)
+
+    def test_compact_folds_micro_unknown_gap(self):
+        rows = [
+            _row(interval_id='a', start_ms=0, end_ms=120_000, title='Chrome', label='', category='', task_id=None),
+            _row(
+                interval_id='gap',
+                state='unknown',
+                start_ms=120_000,
+                end_ms=150_000,
+                label=None,
+                category='',
+                project='',
+                task_id=None,
+                title=None,
+                source='fallback',
+            ),
+            _row(interval_id='b', start_ms=150_000, end_ms=300_000, title='Chrome', label='', category='', task_id=None),
+        ]
+        merged = compact_cards(cards(rows), merge_gap_ms=180_000, fold_gap_ms=120_000)
+        self.assertEqual(len(merged), 1)
+        self.assertTrue(all(r['state'] == 'active' for r in merged[0]['rows']))
 
     def test_overview_includes_window_titled_active_segments(self):
         rows = [

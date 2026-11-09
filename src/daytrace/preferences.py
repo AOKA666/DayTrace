@@ -35,6 +35,21 @@ def screenshots_enabled(database):
     return options(database).get('screenshots_enabled') is True
 
 
+def diary_gap_ms(database):
+    opts = options(database)
+    try:
+        merge = int(opts.get('diary_merge_gap_seconds', 180))
+    except (TypeError, ValueError):
+        merge = 180
+    try:
+        fold = int(opts.get('diary_fold_gap_seconds', 120))
+    except (TypeError, ValueError):
+        fold = 120
+    merge = max(0, min(600, merge)) * 1000
+    fold = max(0, min(600, fold)) * 1000
+    return merge, fold
+
+
 def save_options(database, **changes):
     path = Path(str(database) + '.preferences.json')
     path.parent.mkdir(parents=True, exist_ok=True)
