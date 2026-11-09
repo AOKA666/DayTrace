@@ -7,11 +7,8 @@ import time
 import unittest
 from unittest.mock import patch
 from datetime import datetime
-import tkinter as tk
-
 from daytrace.personalization.diary_model import cards
 from daytrace.personalization.diary_worker import tick,review,validate,validate_review
-from daytrace.personalization.diary_ui import DiaryApp
 from daytrace.personalization.store import Memory
 from daytrace.engine import Engine
 from daytrace.domain import Observation
@@ -154,7 +151,10 @@ class DiaryTests(unittest.TestCase):
             memory.feedback(self.ids[1],'不同任务','学习')
             self.assertEqual(len(cards(memory.timeline())),3)
         finally:memory.close()
+    @unittest.skipUnless(__import__('importlib').util.find_spec('tkinter'), 'tkinter required for UI smoke')
     def test_virtualized_canvas_and_navigation_without_collection(self):
+        import tkinter as tk
+        from daytrace.personalization.diary_ui import DiaryApp
         root=tk.Tk();root.withdraw()
         app=DiaryApp(root,self.path)
         try:

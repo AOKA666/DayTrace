@@ -7,11 +7,20 @@ import time
 
 from .ui import App
 from .diary_canvas import DiaryCanvas, BG, INK, MUTED, BLUE
+import sys
 from .diary_model import cards, overview, duration, DEFAULT_CATEGORIES
 from .store import Memory
 from .classifier import Classifier
 from .provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider
 from ..preferences import options, save_options
+
+
+def window_scaling(root):
+    try:
+        scale = max(1.0, min(2.0, root.winfo_fpixels('1i') / 96.0))
+        root.tk.call('tk', 'scaling', scale)
+    except tk.TclError:
+        pass
 
 
 def scrolling_section(book,label):
@@ -49,6 +58,7 @@ class DiaryApp(App):
         root.geometry('1280x800')
         root.minsize(1040, 700)
         root.configure(bg=BG)
+        window_scaling(root)
         style = ttk.Style(root)
         style.configure('.', background=BG, foreground=INK)
         style.configure('Accent.TButton', background=BLUE, foreground='white', padding=(16,8))
@@ -144,7 +154,7 @@ class DiaryApp(App):
         self.summary_label=ttk.Label(self.summary_box,textvariable=self.summary,wraplength=790,foreground='#66758C',background='white')
         self.summary_label.pack(anchor='w',pady=(8,0))
         body=ttk.Frame(self.timeline_tab);body.pack(fill='both',expand=True)
-        self.diary=DiaryCanvas(body,self.open_card,self.hover_image)
+        self.diary=DiaryCanvas(body,self.open_card,self.hover_image,self.quick_confirm)
         bar=ttk.Scrollbar(body,orient='vertical',command=self.diary.yview)
         self.diary.configure(yscrollcommand=bar.set)
         bar.pack(side='right',fill='y');self.diary.pack(fill='both',expand=True)
@@ -162,8 +172,10 @@ class DiaryApp(App):
         self.heading.set({'今日':'今天的故事','历史记录':'时光档案','AI 复盘':'回看这一天'}.get(page,'今天的故事'))
         if page=='今日':
             self.date.delete(0,'end');self.date.insert(0,datetime.now().strftime('%Y-%m-%d'))
-        if page=='AI 复盘' and not self.summary_label.winfo_manager():self.summary_label.pack(anchor='w',pady=(8,0))
-        if refresh:self.refresh()
+        if page == 'AI 复盘' and not self.summary_label.winfo_manager():
+            self.summary_label.pack(anchor='w', pady=(8, 0))
+        if refresh:
+            self.refresh()
 
     def shift_day(self,delta):
         try:day=datetime.strptime(self.date.get(),'%Y-%m-%d')+timedelta(days=delta)
@@ -218,6 +230,11 @@ class DiaryApp(App):
         shown=[c for c in self.all_cards if (not self.only_review or c['review']) and (not query or query in (c['title']+' '+c['category']+' '+c['project']).casefold())]
         self.diary.set_cards(shown,self.category_colors)
 
+    def quick_confirm(self, card):
+        if card['rows'][0]['state'] != 'active':
+            return
+        self.confirm_cards([card])
+
     def open_card(self,card):
         if len(card['rows'])==1:
             row=card['rows'][0]
@@ -268,6 +285,8 @@ class DiaryApp(App):
         windows=[w for w in self.root.winfo_children() if isinstance(w,tk.Toplevel)]
         if not windows:return
         win=windows[-1]
+        win.configure(bg=BG)
+        win.title(f"活动详情 · {(row.get('label') or row.get('title') or '待确认')[:32]}")
         # Merge is an explicit human decision at a contiguous active boundary.
         current=next((c for c in self.all_cards if row['interval_id'] in [r['interval_id'] for r in c['rows']]),None)
         if current:
@@ -310,7 +329,10 @@ class DiaryApp(App):
             if not messagebox.askyesno('开始记录','记录前台应用、窗口标题和可读正文。截图是否开启遵循“采集与隐私”设置。现在开始？'):return
             source_root=Path(__file__).parents[3]
             entry=[str(source_root/'daytrace.py')] if (source_root/'daytrace.py').is_file() else ['-m','daytrace']
-            self.collector_process=subprocess.Popen([sys.executable,*entry,'--db',str(self.database),'start','--content'],cwd=str(source_root),creationflags=subprocess.CREATE_NO_WINDOW)
+            launch = dict(cwd=str(source_root))
+            if sys.platform == 'win32':
+                launch['creationflags'] = subprocess.CREATE_NO_WINDOW
+            self.collector_process=subprocess.Popen([sys.executable,*entry,'--db',str(self.database),'start','--content'],**launch)
         else:
             from ..cli import control
             command='resume' if self.recording=='paused' else 'pause'
