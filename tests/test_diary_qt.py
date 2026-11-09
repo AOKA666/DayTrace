@@ -58,6 +58,15 @@ class DiaryQtTests(unittest.TestCase):
             with patch('daytrace.personalization.diary_worker.is_running', return_value=False):
                 self.assertEqual(read_capture_state(path), 'stopped')
 
+    def test_job_bridge_uses_qt_signal_not_worker_qtimer(self):
+        from PySide6.QtCore import QObject
+        from daytrace.personalization.diary_qt import jobs
+
+        self.assertTrue(issubclass(jobs.JobBridge, QObject))
+        text = (DIARY_QT / 'window.py').read_text(encoding='utf-8')
+        self.assertIn('_job_bridge.finished.emit', text)
+        self.assertNotIn('QTimer.singleShot(0, lambda: done', text)
+
     def test_diary_qt_no_wrong_parent_preferences_imports(self):
         """diary_qt lives one level deeper than personalization; preferences/cli sit under daytrace."""
         offenders = []

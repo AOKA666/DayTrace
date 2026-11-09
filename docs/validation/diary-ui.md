@@ -29,7 +29,9 @@ Tk 日记壳（`--tk-diary`）仍保留 Canvas 实现，视觉略旧，仅供回
 
 默认今日页，不自动监测。用户点击开始后，明确确认标题和正文采集；截图仍遵循独立开关。由 UI 启动的采集器在关闭 UI 时先停止，外部终端启动的采集器仍由原终端管理。
 
-**采集状态显示**：Qt 壳每约 2 秒独立查询 `capture_state`（与慢速 AI `review()` 解耦）。若在终端已对同一 `--db` 执行 `start --content`，打开 `daytrace.py ui` 后顶栏应显示「正在记录」，且再次点「开始记录」不会启动第二实例（实例锁冲突会提示 stderr 摘要）。
+**采集状态显示**：Qt 壳每约 2 秒独立查询 `capture_state`（与慢速 AI `review()` 解耦；`busy` 时跳过以免与 `refresh` 争用 UI 任务池）。若在终端已对同一 `--db` 执行 `start --content`，打开 `daytrace.py ui` 后顶栏应显示「正在记录」，且再次点「开始记录」不会启动第二实例（实例锁冲突会提示 stderr 摘要）。
+
+**线程回归**：后台 `ThreadPoolExecutor` 完成回调必须通过 `JobBridge.finished`（`QObject` + `Signal`）回到 UI 线程处理 `busy` 与 `show()`；禁止在 worker `add_done_callback` 里直接 `QTimer.singleShot`，否则 `busy` 可能永不归零、时间线空白且所有操作提示「请等待」。
 
 隔离示例预览：
 

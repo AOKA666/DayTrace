@@ -42,6 +42,7 @@ from ..store import Memory
 from ..timeline_view import PALETTE
 from .capture_sync import read_capture_state, repo_root
 from .dialogs import ConfirmDialog, DetailDialog, FragmentDialog
+from .jobs import CaptureBridge, JobBridge
 from .theme import ACCENT, BG, BORDER, MUTED, NAV_ITEMS, SURFACE
 from .timeline import TimelineWidget
 
@@ -68,7 +69,13 @@ class DiaryMainWindow(QMainWindow):
         self.collector_process = None
         self.hover_id = ''
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='daytrace-qt')
+        self._capture_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='daytrace-qt-capture')
         self.ai_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='daytrace-qt-ai')
+        self._job_bridge = JobBridge(self)
+        self._job_bridge.finished.connect(self._complete_job)
+        self._capture_bridge = CaptureBridge(self)
+        self._capture_bridge.state_ready.connect(self._apply_capture_state)
+        self._capture_sync_pending = False
         self.preview_popup = None
 
         self.setWindowTitle('DayTrace · AI 时间日记' + (' · 合成示例' if preview_mode else ''))
@@ -391,19 +398,19 @@ class DiaryMainWindow(QMainWindow):
                 memory.close()
 
         self.busy = True
+        future = self.executor.submit(work)
+        future.add_done_callback(lambda f: self._job_bridge.finished.emit(f, callback, quiet))
 
-        def done(future):
-            self.busy = False
-            try:
-                value = future.result()
-                if callback:
-                    callback(value)
-            except Exception:
-                if not quiet:
-                    QMessageBox.critical(self, '操作未完成', '请检查数据库状态；隐私操作前请停止采集。')
-
-        fut = self.executor.submit(work)
-        fut.add_done_callback(lambda f: QTimer.singleShot(0, lambda: done(f)))
+    def _complete_job(self, future, callback, quiet):
+        """Runs on the GUI thread via JobBridge.finished (never call QTimer from a worker)."""
+        self.busy = False
+        try:
+            value = future.result()
+            if callback:
+                callback(value)
+        except Exception:
+            if not quiet:
+                QMessageBox.critical(self, '操作未完成', '请检查数据库状态；隐私操作前请停止采集。')
 
     def refresh(self, load_profile=False, quiet=False):
         try:
@@ -705,23 +712,24 @@ class DiaryMainWindow(QMainWindow):
         self.capture_state.setText({'running': '正在记录', 'paused': '已暂停', 'stopped': '未开始记录'}[state])
         self.capture_button.setText({'running': '暂停', 'paused': '恢复', 'stopped': '开始记录'}[state])
 
+    def _apply_capture_state(self, state: str) -> None:
+        self._update_capture_chrome(state)
+        if state != 'stopped' and self.collector_process and self.collector_process.poll() is not None:
+            self.collector_process = None
+        self._capture_sync_pending = False
+
     def sync_capture_state(self) -> None:
-        if self.preview_mode or self.closed:
+        if self.preview_mode or self.closed or self.busy or self._capture_sync_pending:
             return
+        self._capture_sync_pending = True
 
-        def apply(state: str) -> None:
-            self._update_capture_chrome(state)
-            if state != 'stopped' and self.collector_process and self.collector_process.poll() is not None:
-                self.collector_process = None
-
-        future = self.executor.submit(read_capture_state, self.database)
+        future = self._capture_executor.submit(read_capture_state, self.database)
 
         def done(fut) -> None:
             try:
-                state = fut.result()
+                self._capture_bridge.state_ready.emit(fut.result())
             except Exception:
-                return
-            QTimer.singleShot(0, lambda s=state: apply(s))
+                self._capture_sync_pending = False
 
         future.add_done_callback(done)
 
@@ -851,6 +859,7 @@ class DiaryMainWindow(QMainWindow):
                 event.ignore()
                 return
         self.ai_executor.shutdown(wait=False, cancel_futures=True)
+        self._capture_executor.shutdown(wait=False, cancel_futures=True)
         self.executor.shutdown(wait=False, cancel_futures=True)
         event.accept()
 
