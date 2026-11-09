@@ -1,15 +1,8 @@
 """Compact 24-hour canvas; colored fragments preserve exact source intervals."""
 from datetime import datetime, timedelta
-import hashlib
 import tkinter as tk
 
-PALETTE = ('#7566D9','#3C9B92','#DC9B4B','#5B8FCB','#CA7298','#849448','#A17DD0','#C87C60')
-
-
-def category_color(name, colors):
-    if not name:
-        return '#BEC7D3'
-    return colors.get(name) or PALETTE[int(hashlib.sha256(name.encode()).hexdigest()[:8],16)%len(PALETTE)]
+from .category_palette import PALETTE, category_color
 
 
 class DayCanvas(tk.Canvas):

@@ -6,7 +6,7 @@ DayTrace 当前通过命令行记录前台应用、窗口标题、活动时间�
 
 默认桌面界面已改为 AI 时间日记：纵向活动卡片、历史搜索、待确认、个人档案和学习规则。云端默认关闭，明确开启后可后台批量识别新活动并生成授权范围内的简短复盘；截图留存为独立本地开关。**真实全天准确率、真实模型调用和新版视觉验收尚未完成，浏览器扩展未实现。** Chrome 标签名来自前台窗口标题，不代表取得完整正文；使用 VS Code 不等于完成编程任务。
 
-运行新版：`.\.venv\Scripts\python.exe .\daytrace.py ui`。隔离示例：`.\.venv\Scripts\python.exe .\tools\preview_diary.py`。旧版回退：`ui --legacy`。实现边界、授权范围和本机截图验收见 [时间日记改版说明](docs/validation/diary-ui.md)。以下较早阶段记录中的旧 UI 和逐批授权说明，以该文档为准。
+运行新版（Qt 日记壳，需先 `pip install -r requirements-ui.txt`）：`.\.venv\Scripts\python.exe .\daytrace.py ui`。隔离示例：`.\.venv\Scripts\python.exe .\tools\preview_diary.py`。回退：`ui --tk-diary`（Tk 日记）或 `ui --legacy`（旧表格 UI）。实现边界、授权范围和本机截图验收见 [时间日记改版说明](docs/validation/diary-ui.md)。以下较早阶段记录中的旧 UI 和逐批授权说明，以该文档为准。
 
 ## 打开个性化识别界面
 

@@ -193,7 +193,7 @@ class ProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'test.sqlite3'
             old = Repository(path)
-            self.assertEqual(old.db.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(old.db.execute('PRAGMA user_version').fetchone()[0], 3)
             old.close()
             memory = Memory(path)
             proposal = propose_profile('我用 VS Code 开发，Chrome 查竞品，password=secretvalue')
