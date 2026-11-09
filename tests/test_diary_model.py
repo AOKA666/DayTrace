@@ -202,6 +202,35 @@ class DiaryModelTests(unittest.TestCase):
         self.assertIn('短暂停留', strict_titles)
         self.assertNotIn('通知', strict_titles)
 
+    def test_merge_across_hidden_brief_gaps_same_chrome_title(self):
+        title = '华杉讲透《孙子兵法》 - 华杉 - 微信读书 - Google Chrome'
+        t0 = 20 * 3_600_000 + 46 * 60_000
+        rows = [
+            _row(interval_id='r1', start_ms=t0, end_ms=t0 + 4 * 60_000, title=title, label='', task_id=None, process_name='chrome.exe'),
+            _row(interval_id='b1', start_ms=t0 + 4 * 60_000, end_ms=t0 + 4 * 60_000 + 3_000, title='切换', label='', task_id=None, process_name='chrome.exe'),
+            _row(interval_id='r2', start_ms=t0 + 4 * 60_000 + 4 * 60_000, end_ms=t0 + 4 * 60_000 + 6 * 60_000, title=title, label='', task_id=None, process_name='chrome.exe'),
+            _row(interval_id='b2', start_ms=t0 + 10 * 60_000, end_ms=t0 + 10 * 60_000 + 2_000, title='切换', label='', task_id=None, process_name='chrome.exe'),
+            _row(interval_id='r3', start_ms=t0 + 11 * 60_000, end_ms=t0 + 20 * 60_000, title=title, label='', task_id=None, process_name='chrome.exe'),
+        ]
+        merged = build_display_cards(rows, dwell_ms=5_000, merge_gap_ms=180_000, fold_gap_ms=120_000, show_short_dwells=False)
+        chrome = [c for c in merged if title == c['title']]
+        self.assertEqual(len(chrome), 1)
+        self.assertEqual(chrome[0]['start_ms'], rows[0]['start_ms'])
+        self.assertEqual(chrome[0]['end_ms'], rows[-1]['end_ms'])
+        self.assertEqual(len(chrome[0]['rows']), 3)
+
+    def test_merge_blocked_by_different_activity_between(self):
+        title = '华杉讲透《孙子兵法》 - 华杉 - 微信读书 - Google Chrome'
+        t0 = 20 * 3_600_000 + 46 * 60_000
+        rows = [
+            _row(interval_id='r1', start_ms=t0, end_ms=t0 + 4 * 60_000, title=title, label='', task_id=None),
+            _row(interval_id='grok', start_ms=t0 + 4 * 60_000, end_ms=t0 + 8 * 60_000, title='Grok Bot', label='', task_id=None, process_name='other.exe'),
+            _row(interval_id='r2', start_ms=t0 + 8 * 60_000, end_ms=t0 + 20 * 60_000, title=title, label='', task_id=None),
+        ]
+        merged = build_display_cards(rows, dwell_ms=5_000, show_short_dwells=False)
+        chrome = [c for c in merged if title == c['title']]
+        self.assertEqual(len(chrome), 2)
+
     def test_compact_merges_same_window_with_short_gap(self):
         rows = [
             _row(interval_id='a', start_ms=0, end_ms=60_000, title='VS Code', label='', category='', task_id=None),

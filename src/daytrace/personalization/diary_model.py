@@ -246,6 +246,53 @@ def prepare_diary_rows(rows, dwell_ms):
     return collapse_short_gap_rows(project_dwell_threshold(rows, dwell_ms))
 
 
+def _is_brief_dwell_card(card, dwell_ms):
+    dwell_ms = max(0, int(dwell_ms))
+    span = card['end_ms'] - card['start_ms']
+    if dwell_ms and span < dwell_ms:
+        return True
+    if card.get('title') == '短暂停留' or _gap_has_short_dwell(card):
+        return True
+    return False
+
+
+def _only_brief_between(items, start_ms, end_ms, dwell_ms):
+    """True when the open interval contains only brief-dwell / micro-gap cards."""
+    for card in items:
+        if card['end_ms'] <= start_ms or card['start_ms'] >= end_ms:
+            continue
+        if _is_brief_dwell_card(card, dwell_ms):
+            continue
+        if _gap_card(card) and (card['end_ms'] - card['start_ms']) < dwell_ms:
+            continue
+        return False
+    return True
+
+
+def merge_after_brief_filter(visible, all_items, dwell_ms, merge_gap_ms):
+    if len(visible) < 2:
+        return visible
+    merge_gap_ms = max(0, int(merge_gap_ms))
+    merged = [visible[0]]
+    for card in visible[1:]:
+        previous = merged[-1]
+        if _gap_card(previous) or _gap_card(card):
+            merged.append(card)
+            continue
+        if _active_signature(previous) != _active_signature(card):
+            merged.append(card)
+            continue
+        bridge = card['start_ms'] - previous['end_ms']
+        if bridge < 0:
+            merged.append(card)
+            continue
+        if bridge <= merge_gap_ms or _only_brief_between(all_items, previous['end_ms'], card['start_ms'], dwell_ms):
+            merged[-1] = _join_cards(previous, card)
+            continue
+        merged.append(card)
+    return merged
+
+
 def filter_short_dwell_cards(items, show_short_dwells=False, dwell_ms=0):
     """Default off: hide any card shorter than dwell or marked brief dwell."""
     if show_short_dwells:
@@ -254,11 +301,7 @@ def filter_short_dwell_cards(items, show_short_dwells=False, dwell_ms=0):
     kept = []
     for card in items:
         span = card['end_ms'] - card['start_ms']
-        hide = False
-        if dwell_ms and span < dwell_ms:
-            hide = True
-        if card.get('title') == '短暂停留' or _gap_has_short_dwell(card):
-            hide = True
+        hide = _is_brief_dwell_card(card, dwell_ms)
         if not hide:
             kept.append(card)
     return kept
@@ -273,7 +316,10 @@ def build_display_cards(
 ):
     """Presentation pipeline: dwell projection → cards → compaction → optional brief-dwell filter."""
     items = compact_cards(cards(prepare_diary_rows(rows, dwell_ms)), merge_gap_ms, fold_gap_ms)
-    return filter_short_dwell_cards(items, show_short_dwells, dwell_ms)
+    visible = filter_short_dwell_cards(items, show_short_dwells, dwell_ms)
+    if not show_short_dwells:
+        visible = merge_after_brief_filter(visible, items, dwell_ms, merge_gap_ms)
+    return visible
 
 
 def compact_cards(items, merge_gap_ms=DEFAULT_MERGE_GAP_MS, fold_gap_ms=DEFAULT_FOLD_GAP_MS):
