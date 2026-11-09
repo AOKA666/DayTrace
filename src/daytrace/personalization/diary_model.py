@@ -243,9 +243,29 @@ def prepare_diary_rows(rows, dwell_ms):
     return collapse_short_gap_rows(project_dwell_threshold(rows, dwell_ms))
 
 
-def build_display_cards(rows, dwell_ms, merge_gap_ms=DEFAULT_MERGE_GAP_MS, fold_gap_ms=DEFAULT_FOLD_GAP_MS):
-    """Presentation pipeline: dwell projection → cards → compaction."""
-    return compact_cards(cards(prepare_diary_rows(rows, dwell_ms)), merge_gap_ms, fold_gap_ms)
+def filter_short_dwell_cards(items, show_short_dwells=False):
+    if show_short_dwells:
+        return items
+    return [
+        card
+        for card in items
+        if not (
+            _gap_card(card)
+            and (card.get('title') == '短暂停留' or _gap_has_short_dwell(card))
+        )
+    ]
+
+
+def build_display_cards(
+    rows,
+    dwell_ms,
+    merge_gap_ms=DEFAULT_MERGE_GAP_MS,
+    fold_gap_ms=DEFAULT_FOLD_GAP_MS,
+    show_short_dwells=False,
+):
+    """Presentation pipeline: dwell projection → cards → compaction → optional brief-dwell filter."""
+    items = compact_cards(cards(prepare_diary_rows(rows, dwell_ms)), merge_gap_ms, fold_gap_ms)
+    return filter_short_dwell_cards(items, show_short_dwells)
 
 
 def compact_cards(items, merge_gap_ms=DEFAULT_MERGE_GAP_MS, fold_gap_ms=DEFAULT_FOLD_GAP_MS):

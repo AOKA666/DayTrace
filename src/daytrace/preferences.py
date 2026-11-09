@@ -35,6 +35,10 @@ def screenshots_enabled(database):
     return options(database).get('screenshots_enabled') is True
 
 
+def show_short_dwells(database):
+    return options(database).get('show_short_dwells') is True
+
+
 def diary_display_ms(database):
     """Read dwell + diary compaction thresholds as milliseconds (presentation layer)."""
     dwell_ms = int(round(dwell_seconds(database) * 1000))

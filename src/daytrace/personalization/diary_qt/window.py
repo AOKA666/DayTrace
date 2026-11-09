@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 from ..classifier import Classifier
 from ..diary_model import DEFAULT_CATEGORIES, build_display_cards, cards, overview
 from ..diary_worker import review, tick
-from ...preferences import diary_display_ms, options, save_dwell, save_options, validate_dwell
+from ...preferences import diary_display_ms, options, save_dwell, save_options, show_short_dwells, validate_dwell
 from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
 from ..store import Memory, PersonalizationUpgradeBlocked
@@ -395,6 +395,9 @@ class DiaryMainWindow(QMainWindow):
         self.fold_gap.setObjectName('settingsField')
         self.fold_gap.setMaximumWidth(88)
         privacy.addWidget(self.fold_gap)
+        self.show_short_dwells = QCheckBox('显示短暂停留（默认关，仅看主要活动）')
+        self.show_short_dwells.toggled.connect(self._save_show_short_dwells)
+        privacy.addWidget(self.show_short_dwells)
 
         advanced = self._settings_panel('模型与高级', '模型连接')
         adv = QLabel('密钥仅存于 Windows Credential Manager。')
@@ -504,7 +507,13 @@ class DiaryMainWindow(QMainWindow):
         def read(memory):
             raw = [dict(r, start_ms=max(start, r['start_ms']), end_ms=min(end, r['end_ms'])) for r in memory.timeline(start, end)]
             dwell_ms, merge_ms, fold_ms = diary_display_ms(self.database)
-            items = build_display_cards(raw, dwell_ms, merge_ms, fold_ms)
+            items = build_display_cards(
+                raw,
+                dwell_ms,
+                merge_ms,
+                fold_ms,
+                show_short_dwells=show_short_dwells(self.database),
+            )
             return raw, items, memory.profile(), memory.tasks(), memory.rules(), options(self.database)
 
         def show(data):
@@ -535,6 +544,9 @@ class DiaryMainWindow(QMainWindow):
                 self.dwell.setText(str(config.get('min_dwell_seconds', 5)))
                 self.merge_gap.setText(str(config.get('diary_merge_gap_seconds', 180)))
                 self.fold_gap.setText(str(config.get('diary_fold_gap_seconds', 120)))
+                self.show_short_dwells.blockSignals(True)
+                self.show_short_dwells.setChecked(config.get('show_short_dwells') is True)
+                self.show_short_dwells.blockSignals(False)
                 self.capture_enabled.setChecked(config.get('screenshots_enabled') is True)
                 self.auto_ai.setChecked(config.get('auto_ai') is True)
                 if config.get('ai_endpoint'):
@@ -636,6 +648,17 @@ class DiaryMainWindow(QMainWindow):
                 else value
             )
         self.run_job(lambda m: m.save_profile(profile), lambda _: self.refresh())
+
+    def _save_show_short_dwells(self, enabled):
+        if self.busy:
+            self.show_short_dwells.blockSignals(True)
+            self.show_short_dwells.setChecked(not enabled)
+            self.show_short_dwells.blockSignals(False)
+            return
+        self.run_job(
+            lambda _m: save_options(self.database, show_short_dwells=enabled),
+            lambda _: self.refresh(),
+        )
 
     def save_capture_preferences(self):
         try:

@@ -13,7 +13,7 @@
 - **壳层**：Qt 窄侧栏导航（圆角选中态）；顶栏日期胶囊、筛选、待确认、记录状态。
 - **时间线**：对标「时间日志」日记卡片——左起止时间、中 **醒目时长** + 标题/备注、右上 **分类色块**；`pitch` 约 **104px**，扁行高、横向铺满。展示前 `compact_cards` 合并同窗口短间隔（默认 **180s**）并折叠短空隙（默认 **120s**），减少碎卡与「未记录」刷屏。
 - **滚动条**：时间线/设置 `QScrollArea` 使用系统纵向滑块；时间线画布 `wheelEvent` 交给父级滚动；滑块加宽至 **12px**、最小把手 **48px**，可点击拖拽。
-- **展示阈值即改即显**：保存后 `build_display_cards` = `project_dwell_threshold`（短 active→短暂停留）→ `collapse_short_gap_rows` → `cards` → `compact_cards`；不改库；保存后即 `refresh` 当前日期。
+- **展示阈值即改即显**：`build_display_cards` 含停留投影与合并；默认 **`show_short_dwells=false` 隐藏「短暂停留」**；设置勾选后立即 `refresh` 当前日期。
 - **设置**：标签下可滚动内容区（外边距约 20–28px）；**勿**对 `body` 设 `AlignTop`（会阻止子项横向 Expanding）；`settingsPanel` 无 max-width、`Expanding/Preferred`，底部 `addStretch` 收空白；字段随面板伸展。
 - **分类颜色**：设置 → **分类颜色** 标签；名称 + 色板/`QColorDialog`；持久化 `preferences.category_colors` 与个人档案 `activities`；默认 `DEFAULT_CATEGORY_COLORS` 首次补齐。
 - **时间线标签**：分类以色块 chip 展示（分类色底 + `contrasting_text` 字色）；「待确认」用暖色中性 chip。

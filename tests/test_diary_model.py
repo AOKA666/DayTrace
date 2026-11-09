@@ -8,6 +8,7 @@ from daytrace.personalization.diary_model import (
     build_display_cards,
     cards,
     compact_cards,
+    filter_short_dwell_cards,
     overview,
     prepare_diary_rows,
     project_dwell_threshold,
@@ -86,6 +87,21 @@ class DiaryModelTests(unittest.TestCase):
         items = cards(prepare_diary_rows(rows, 5_000))
         self.assertEqual(items[0]['title'], '短暂停留')
 
+    def test_short_dwell_filter_default_hidden(self):
+        rows = [
+            _row(interval_id='long', start_ms=0, end_ms=120_000, title='Chrome', label='', category='', task_id=None),
+            _row(interval_id='short', start_ms=120_000, end_ms=128_000, title='通知', label='', category='', task_id=None),
+        ]
+        hidden = build_display_cards(rows, dwell_ms=60_000, show_short_dwells=False)
+        visible = build_display_cards(rows, dwell_ms=60_000, show_short_dwells=True)
+        self.assertEqual([c['title'] for c in hidden], ['Chrome'])
+        self.assertIn('短暂停留', [c['title'] for c in visible])
+
+    def test_filter_short_dwell_cards_respects_flag(self):
+        brief = cards(prepare_diary_rows([_row(start_ms=0, end_ms=2_000, label='', task_id=None)], 5_000))
+        self.assertEqual(len(filter_short_dwell_cards(brief, False)), 0)
+        self.assertEqual(len(filter_short_dwell_cards(brief, True)), 1)
+
     def test_dwell_threshold_changes_card_count(self):
         rows = [
             _row(interval_id='long', start_ms=0, end_ms=120_000, title='Chrome', label='', category='', task_id=None),
@@ -104,7 +120,7 @@ class DiaryModelTests(unittest.TestCase):
             ),
         ]
         loose = build_display_cards(rows, dwell_ms=1_000, merge_gap_ms=180_000, fold_gap_ms=120_000)
-        strict = build_display_cards(rows, dwell_ms=60_000, merge_gap_ms=180_000, fold_gap_ms=120_000)
+        strict = build_display_cards(rows, dwell_ms=60_000, merge_gap_ms=180_000, fold_gap_ms=120_000, show_short_dwells=True)
         loose_titles = [c['title'] for c in loose]
         strict_titles = [c['title'] for c in strict]
         self.assertIn('通知', loose_titles)
