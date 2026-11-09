@@ -19,6 +19,7 @@ def _row(**overrides):
         project='DayTrace',
         task_id='t1',
         title='api.py',
+        process_name='Code.exe',
         app_id='code',
         manual=0,
         disposition='',
@@ -49,6 +50,42 @@ class DiaryModelTests(unittest.TestCase):
         items = cards(rows)
         self.assertTrue(items[0]['review'])
         self.assertIn('待确认', items[0]['status'])
+
+    def test_active_without_task_label_shows_window_title(self):
+        rows = [
+            _row(
+                interval_id='raw',
+                label='',
+                category='',
+                task_id=None,
+                title='DayTrace · README — Google Chrome',
+                process_name='chrome.exe',
+                reliability='tentative',
+                source='pending',
+                disposition='',
+                reason='',
+            )
+        ]
+        items = cards(rows)
+        self.assertEqual(items[0]['title'], 'DayTrace · README — Google Chrome')
+        self.assertEqual(items[0]['category'], '待确认')
+        self.assertTrue(items[0]['review'])
+        self.assertIn('窗口标题', items[0]['description'])
+
+    def test_overview_includes_window_titled_active_segments(self):
+        rows = [
+            _row(
+                label='工作',
+                category='工作',
+                task_id=None,
+                title='VS Code - diary_model.py',
+                reliability='unknown',
+                source='fallback',
+            )
+        ]
+        summary = overview(cards(rows))
+        self.assertIn('VS Code', summary)
+        self.assertNotIn('活动还在整理中', summary)
 
 
 if __name__ == '__main__':
