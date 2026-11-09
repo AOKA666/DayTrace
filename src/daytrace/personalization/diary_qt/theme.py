@@ -137,7 +137,7 @@ QLabel#fieldLabel {{
     padding-top: 6px;
 }}
 QLineEdit#settingsField, QTextEdit#settingsArea {{
-    max-width: 440px;
+    min-width: 240px;
 }}
 QCheckBox {{
     spacing: 8px;

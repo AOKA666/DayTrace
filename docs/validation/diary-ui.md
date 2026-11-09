@@ -12,7 +12,7 @@
 
 - **壳层**：Qt 窄侧栏导航（圆角选中态）；顶栏日期胶囊、筛选、待确认、记录状态。
 - **时间线**：**扁=矮行高**（`pitch` 约 **100px**），卡片横向仍铺满主内容区；长标题/描述 Elide；`TimelineWidget` + `QPainter` 虚拟绘制。
-- **设置**：`settingsPanel` 白卡片（最大约 **500px**），字段不拉满屏，分区标题 + 说明文字分层。
+- **设置**：标签下 **可滚动内容区**（外边距约 20px）；`settingsPanel` 白卡片左对齐、最大约 **640px**、随主区变宽伸展；分区标题 + 说明分层，控件不挤在左上角。
 - **设置**：五分区横向标签 + `QStackedWidget` 滚动表单。
 - **字体**：Segoe UI + Microsoft YaHei UI（Qt 回退 sans-serif）。
 - **详情/确认**：`QDialog` 圆角控件，证据 `QTextEdit` 只读。

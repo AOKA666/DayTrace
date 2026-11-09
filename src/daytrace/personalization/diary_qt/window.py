@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
@@ -198,32 +199,43 @@ class DiaryMainWindow(QMainWindow):
 
         settings_page = QWidget()
         set_outer = QVBoxLayout(settings_page)
-        set_outer.setContentsMargins(0, 0, 0, 8)
-        set_outer.setSpacing(12)
+        set_outer.setContentsMargins(0, 8, 0, 12)
+        set_outer.setSpacing(14)
         tab_row = QHBoxLayout()
-        tab_row.setSpacing(6)
+        tab_row.setContentsMargins(4, 0, 4, 0)
+        tab_row.setSpacing(8)
         self.settings_stack = QStackedWidget()
+        self.settings_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.settings_tabs: dict[str, QPushButton] = {}
         labels = ['我的日常', '当前项目', '识别与学习', '采集与隐私', '模型与高级']
-        self.settings_pages: dict[str, QWidget] = {}
+        self.settings_pages: dict[str, QVBoxLayout] = {}
         for label in labels:
             btn = QPushButton(label)
             btn.setObjectName('ghost')
             btn.clicked.connect(lambda checked=False, name=label: self.show_settings(name))
             tab_row.addWidget(btn)
             self.settings_tabs[label] = btn
-            page, body = QWidget(), QVBoxLayout()
+            page = QWidget()
             scroll_s = QScrollArea()
             scroll_s.setWidgetResizable(True)
+            scroll_s.setFrameShape(QFrame.Shape.NoFrame)
+            scroll_s.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             inner = QWidget()
-            inner.setLayout(body)
+            body = QVBoxLayout(inner)
+            body.setContentsMargins(20, 16, 24, 28)
+            body.setSpacing(16)
+            body.setAlignment(Qt.AlignmentFlag.AlignTop)
+            inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             scroll_s.setWidget(inner)
             wrap = QVBoxLayout(page)
+            wrap.setContentsMargins(0, 0, 0, 0)
+            wrap.setSpacing(0)
             wrap.addWidget(scroll_s)
             self.settings_stack.addWidget(page)
             self.settings_pages[label] = body
+        tab_row.addStretch(1)
         set_outer.addLayout(tab_row)
-        set_outer.addWidget(self.settings_stack)
+        set_outer.addWidget(self.settings_stack, 1)
         self.stack.addWidget(settings_page)
         self._build_settings()
         self.show_settings('我的日常')
@@ -249,19 +261,18 @@ class DiaryMainWindow(QMainWindow):
 
     def _settings_panel(self, page_key: str, title: str) -> QVBoxLayout:
         page = self.settings_pages[page_key]
-        page.setContentsMargins(0, 0, 0, 0)
-        page.setSpacing(0)
         panel = QFrame()
         panel.setObjectName('settingsPanel')
-        panel.setMaximumWidth(500)
+        panel.setMaximumWidth(640)
+        panel.setMinimumWidth(360)
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         inner = QVBoxLayout(panel)
-        inner.setContentsMargins(20, 18, 20, 20)
-        inner.setSpacing(8)
+        inner.setContentsMargins(22, 20, 22, 22)
+        inner.setSpacing(10)
         heading = QLabel(title)
         heading.setObjectName('sectionTitle')
         inner.addWidget(heading)
-        page.addWidget(panel, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        page.addStretch(1)
+        page.addWidget(panel)
         return inner
 
     def _settings_field(self, parent: QVBoxLayout, label: str) -> QLineEdit:
@@ -315,7 +326,7 @@ class DiaryMainWindow(QMainWindow):
         save_p = QPushButton('保存个人档案')
         save_p.setObjectName('accent')
         save_p.clicked.connect(self.save_profile)
-        projects.addWidget(save_p, 0, Qt.AlignmentFlag.AlignLeft)
+        projects.addWidget(save_p)
 
         learning = self._settings_panel('识别与学习', 'AI 与记忆')
         sub = QLabel('默认不联网；开启后在本窗口内分批整理新活动。')
@@ -329,7 +340,9 @@ class DiaryMainWindow(QMainWindow):
         self.ai_note.setObjectName('caption')
         self.ai_note.setWordWrap(True)
         learning.addWidget(self.ai_note)
-        learning.addSpacing(6)
+        learning.addSpacing(4)
+        tool_col = QVBoxLayout()
+        tool_col.setSpacing(8)
         for text, slot in [
             ('重试待识别活动', self.retry_ai),
             ('管理学习规则', self.rule_dialog),
@@ -341,7 +354,10 @@ class DiaryMainWindow(QMainWindow):
             btn = QPushButton(text)
             btn.setObjectName('ghost')
             btn.clicked.connect(slot)
-            learning.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            tool_col.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
+        tool_col.addStretch(1)
+        learning.addLayout(tool_col)
 
         privacy = self._settings_panel('采集与隐私', '采集与截图')
         note = QLabel('停留阈值在下次启动采集时生效；截图遵循排除与 7 天本地保留。')
@@ -356,7 +372,7 @@ class DiaryMainWindow(QMainWindow):
         t = QPushButton('保存阈值')
         t.setObjectName('ghost')
         t.clicked.connect(self.save_capture_preferences)
-        privacy.addWidget(t, 0, Qt.AlignmentFlag.AlignLeft)
+        privacy.addWidget(t)
         self.capture_enabled = QCheckBox('开启本地截图证据')
         self.capture_enabled.toggled.connect(self.save_screenshots)
         privacy.addWidget(self.capture_enabled)
@@ -377,7 +393,7 @@ class DiaryMainWindow(QMainWindow):
             b = QPushButton(text)
             b.setObjectName('ghost')
             b.clicked.connect(slot)
-            advanced.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
+            advanced.addWidget(b)
 
     def _style_nav(self):
         for name, btn in self.nav_buttons.items():
