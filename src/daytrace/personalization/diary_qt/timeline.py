@@ -31,8 +31,9 @@ class TimelineWidget(QWidget):
     card_confirm = Signal(object)
     card_hovered = Signal(str)
 
-    pitch = 152
-    rail = 96
+    pitch = 124
+    rail = 78
+    card_max_width = 580
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -49,11 +50,14 @@ class TimelineWidget(QWidget):
         self.setMinimumHeight(h)
         self.update()
 
+    def _content_width(self) -> int:
+        return min(self.card_max_width, max(360, self.width() - self.rail - 28))
+
     def _geom(self, index):
-        y = 12 + index * self.pitch
-        left = self.rail + 8
-        right = max(520, self.width()) - 20
-        bottom = y + self.pitch - 14
+        y = 8 + index * self.pitch
+        left = self.rail + 10
+        right = left + self._content_width()
+        bottom = y + self.pitch - 12
         return left, right, y, bottom
 
     def _index_at(self, pos):
@@ -89,10 +93,10 @@ class TimelineWidget(QWidget):
         first = max(0, int(max(0, vis.top()) // self.pitch) - 2)
         last = min(len(self.cards), int(max(vis.bottom(), self.height()) // self.pitch) + 3)
 
-        title_font = QFont('Microsoft YaHei UI', 11)
+        title_font = QFont('Microsoft YaHei UI', 10)
         title_font.setBold(True)
         meta_font = QFont('Microsoft YaHei UI', 9)
-        time_font = QFont('Segoe UI', 11)
+        time_font = QFont('Segoe UI', 10)
         time_font.setBold(True)
         time_end = QFont('Segoe UI', 9)
 
@@ -104,7 +108,7 @@ class TimelineWidget(QWidget):
             h_card = bottom - y
 
             path = QPainterPath()
-            path.addRoundedRect(QRectF(left, y, right - left, h_card), 10, 10)
+            path.addRoundedRect(QRectF(left, y, right - left, h_card), 8, 8)
             fill = QColor(SURFACE if active else GAP_FILL)
             painter.fillPath(path, fill)
             border = QColor(ACCENT if hovered and active else GAP_BORDER if not active else BORDER)
@@ -122,26 +126,29 @@ class TimelineWidget(QWidget):
             end = datetime.fromtimestamp(card['end_ms'] / 1000)
             painter.setFont(time_font)
             painter.setPen(QColor(INK if active else MUTED))
-            painter.drawText(QRectF(rail_x - 58, y + 10, 50, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, start.strftime('%H:%M'))
+            painter.drawText(QRectF(rail_x - 52, y + 8, 46, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, start.strftime('%H:%M'))
             painter.setFont(time_end)
             painter.setPen(QColor(FAINT))
-            painter.drawText(QRectF(rail_x - 58, y + 30, 50, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, end.strftime('%H:%M'))
+            painter.drawText(QRectF(rail_x - 52, y + 26, 46, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, end.strftime('%H:%M'))
 
             painter.setFont(title_font)
             painter.setPen(QColor(INK if active else MUTED))
-            painter.drawText(QRectF(left + 16, y + 12, right - left - 100, 24), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, card['title'][:48])
+            title_w = int(right - left - 92)
+            title = painter.fontMetrics().elidedText(card['title'], Qt.TextElideMode.ElideRight, title_w)
+            painter.drawText(QRectF(left + 12, y + 10, title_w, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
 
             painter.setFont(meta_font)
             painter.setPen(QColor(FAINT))
             dur = duration(card['end_ms'] - card['start_ms'])
-            painter.drawText(QRectF(right - 120, y + 14, 100, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, dur)
+            painter.drawText(QRectF(right - 88, y + 12, 76, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, dur)
 
             painter.setPen(QColor(MUTED if active else FAINT))
-            desc = painter.fontMetrics().elidedText(card['description'][:120], Qt.TextElideMode.ElideRight, int(right - left - 40))
-            painter.drawText(QRectF(left + 16, y + 40, right - left - 32, 40), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, desc)
+            desc_w = int(right - left - 28)
+            desc = painter.fontMetrics().elidedText(card['description'], Qt.TextElideMode.ElideRight, desc_w)
+            painter.drawText(QRectF(left + 12, y + 34, desc_w, 32), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, desc)
 
-            foot = bottom - 22
-            cx = left + 16
+            foot = bottom - 20
+            cx = left + 12
             category = card.get('category') or ''
             if category:
                 color = category_color(category, self.colors)

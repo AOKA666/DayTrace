@@ -25,7 +25,7 @@ QWidget {{
     background-color: {BG};
     color: {INK};
     font-family: {FONT_UI};
-    font-size: 13px;
+    font-size: 12px;
 }}
 QMainWindow, QDialog {{
     background-color: {BG};
@@ -67,8 +67,8 @@ QComboBox::drop-down {{
 QPushButton {{
     background: {SURFACE};
     border: 1px solid {BORDER};
-    border-radius: 10px;
-    padding: 8px 16px;
+    border-radius: 8px;
+    padding: 6px 12px;
     color: {INK};
 }}
 QPushButton:hover {{
@@ -115,11 +115,29 @@ QPushButton#nav:hover {{
 QPushButton#navActive {{
     background: {SURFACE};
     border: 1px solid {BORDER};
-    border-radius: 10px;
+    border-radius: 8px;
     text-align: left;
-    padding: 10px 14px;
+    padding: 8px 12px;
     color: {INK};
     font-weight: 600;
+}}
+QFrame#settingsPanel {{
+    background: {SURFACE};
+    border: 1px solid {BORDER};
+    border-radius: 12px;
+}}
+QLabel#sectionTitle {{
+    font-size: 15px;
+    font-weight: 600;
+    padding-bottom: 2px;
+}}
+QLabel#fieldLabel {{
+    color: {MUTED};
+    font-size: 11px;
+    padding-top: 6px;
+}}
+QLineEdit#settingsField, QTextEdit#settingsArea {{
+    max-width: 440px;
 }}
 QCheckBox {{
     spacing: 8px;
@@ -129,7 +147,7 @@ QLabel#caption {{
     font-size: 12px;
 }}
 QLabel#title {{
-    font-size: 20px;
+    font-size: 17px;
     font-weight: 600;
 }}
 QFrame#summaryCard {{

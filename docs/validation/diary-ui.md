@@ -11,7 +11,8 @@
 设计 token：`diary_theme.py`（与 Qt 共用）+ `diary_qt/theme.py`（全局 QSS）。纸感底 `#F6F7F9`、圆角 **10–12px** 按钮/输入框、hover/pressed 分层；强调色 `#3B6FE8`；无玻璃拟态与大渐变。
 
 - **壳层**：Qt 窄侧栏导航（圆角选中态）；顶栏日期胶囊、筛选、待确认、记录状态。
-- **时间线**：`TimelineWidget` + `QPainter` 虚拟绘制；左轨起止时间、右卡白底圆角；待确认暖色芯片；缺口灰底。
+- **时间线**：窄列卡片（约 **580px** 内容宽、**124px** 行高），标题省略号，居中列不撑满宽屏；`TimelineWidget` + `QPainter` 虚拟绘制。
+- **设置**：`settingsPanel` 白卡片（最大约 **500px**），字段不拉满屏，分区标题 + 说明文字分层。
 - **设置**：五分区横向标签 + `QStackedWidget` 滚动表单。
 - **字体**：Segoe UI + Microsoft YaHei UI（Qt 回退 sans-serif）。
 - **详情/确认**：`QDialog` 圆角控件，证据 `QTextEdit` 只读。
