@@ -246,18 +246,22 @@ def prepare_diary_rows(rows, dwell_ms):
     return collapse_short_gap_rows(project_dwell_threshold(rows, dwell_ms))
 
 
-def _is_brief_dwell_card(card, dwell_ms):
-    dwell_ms = max(0, int(dwell_ms))
-    span = card['end_ms'] - card['start_ms']
-    if dwell_ms and span < dwell_ms:
-        return True
-    return _gap_card(card) and (card.get('title') == '短暂停留' or _gap_has_short_dwell(card))
-
-
 def filter_short_dwell_cards(items, show_short_dwells=False, dwell_ms=0):
+    """Default off: hide any card shorter than dwell or marked brief dwell."""
     if show_short_dwells:
         return items
-    return [card for card in items if not _is_brief_dwell_card(card, dwell_ms)]
+    dwell_ms = max(0, int(dwell_ms))
+    kept = []
+    for card in items:
+        span = card['end_ms'] - card['start_ms']
+        hide = False
+        if dwell_ms and span < dwell_ms:
+            hide = True
+        if card.get('title') == '短暂停留' or _gap_has_short_dwell(card):
+            hide = True
+        if not hide:
+            kept.append(card)
+    return kept
 
 
 def build_display_cards(

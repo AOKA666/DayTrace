@@ -102,6 +102,52 @@ class DiaryModelTests(unittest.TestCase):
         self.assertEqual(len(filter_short_dwell_cards(brief, False, 5_000)), 0)
         self.assertEqual(len(filter_short_dwell_cards(brief, True, 5_000)), 1)
 
+    def test_filter_hides_titled_active_shorter_than_dwell(self):
+        """Hard filter: even a named/titled active card is hidden when span < dwell."""
+        raw_cards = cards(
+            [
+                _row(
+                    start_ms=0,
+                    end_ms=3_500,
+                    title='README — VS Code',
+                    label='编辑日记模型',
+                    category='工作',
+                    task_id='t1',
+                )
+            ]
+        )
+        self.assertNotEqual(raw_cards[0]['title'], '短暂停留')
+        self.assertEqual(len(filter_short_dwell_cards(raw_cards, show_short_dwells=False, dwell_ms=5_000)), 0)
+        self.assertEqual(len(filter_short_dwell_cards(raw_cards, show_short_dwells=True, dwell_ms=5_000)), 1)
+        hidden = build_display_cards(
+            [_row(start_ms=0, end_ms=3_500, title='README — VS Code', label='编辑日记模型', category='工作', task_id='t1')],
+            dwell_ms=5_000,
+            show_short_dwells=False,
+        )
+        self.assertEqual(hidden, [])
+        visible = build_display_cards(
+            [_row(start_ms=0, end_ms=3_500, title='README — VS Code', label='编辑日记模型', category='工作', task_id='t1')],
+            dwell_ms=5_000,
+            show_short_dwells=True,
+        )
+        self.assertEqual(visible[0]['title'], '短暂停留')
+
+    def test_filter_keeps_gaps_at_or_above_dwell(self):
+        rows = [
+            _row(
+                interval_id='gap',
+                state='unknown',
+                start_ms=0,
+                end_ms=30_000,
+                label=None,
+                title=None,
+                task_id=None,
+                source='fallback',
+            )
+        ]
+        items = compact_cards(cards(rows))
+        self.assertEqual(len(filter_short_dwell_cards(items, False, 5_000)), 1)
+
     def test_named_and_titled_short_active_hidden_by_default(self):
         rows = [
             _row(
