@@ -7,6 +7,16 @@ from ..storage.repository import Repository, InstanceLock, uid
 from .profile import clean_profile
 
 DAY = 86_400_000
+MIGRATION_003 = Path(__file__).parents[1] / 'storage/migrations/003_personalization.sql'
+
+
+class PersonalizationUpgradeBlocked(RuntimeError):
+    """v2 database needs 003 migration but collector holds the instance lock."""
+
+
+def personalization_schema_ready(db) -> bool:
+    row = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='personal_profile'").fetchone()
+    return row is not None
 
 
 class Memory:
@@ -15,15 +25,32 @@ class Memory:
         self.db = self.repo.db
         self.now = now or (lambda: time.time_ns() // 1_000_000)
         try:
-            if self.db.execute('PRAGMA user_version').fetchone()[0] == 2:
-                # Upgrade only while the existing collector is stopped.
-                with InstanceLock(Path(path)):
-                    self.db.executescript((Path(__file__).parents[1] / 'storage/migrations/003_personalization.sql').read_text('utf-8'))
+            self._upgrade_personalization_if_needed(Path(path))
             if cleanup:
                 self.repo.cleanup(self.now())
         except BaseException:
             self.db.rollback()
             self.repo.close()
+            raise
+
+    def _upgrade_personalization_if_needed(self, path: Path) -> None:
+        version = self.db.execute('PRAGMA user_version').fetchone()[0]
+        if version >= 3:
+            return
+        if version != 2:
+            return
+        if personalization_schema_ready(self.db):
+            with self.db:
+                self.db.execute('PRAGMA user_version=3')
+            return
+        try:
+            with InstanceLock(path):
+                self.db.executescript(MIGRATION_003.read_text('utf-8'))
+        except RuntimeError as error:
+            if 'Collector is running' in str(error):
+                raise PersonalizationUpgradeBlocked(
+                    '数据库需要升级到个性化版本才能打开日记。请先在采集终端停止记录（Ctrl+C 或 daytrace stop），再打开界面。'
+                ) from None
             raise
 
     def close(self):
@@ -57,18 +84,68 @@ class Memory:
     def add_category(self,name,color):
         import re
         from ..preferences import options,save_options
+        from .category_palette import PALETTE
         name=normalize(name).strip()[:40]
         if not name or not re.fullmatch(r'#[0-9a-fA-F]{6}',color):
             raise ValueError('Invalid category')
         profile=self.profile()
-        if name not in profile['activities']:
+        created = name not in profile['activities']
+        if created:
             profile['activities'].append(name)
-        self.save_profile(profile)
-        with self.repo.transaction():
-            self.task(name,name,'')
+            self.save_profile(profile)
+            with self.repo.transaction():
+                self.task(name, name, '')
         colors=options(self.repo.path).get('category_colors',{})
         save_options(self.repo.path,category_colors={**colors,name:color})
         return name
+
+    def set_category_color(self, name, color):
+        import re
+        from ..preferences import options, save_options
+        name = normalize(name).strip()[:40]
+        if name not in self.profile()['activities']:
+            raise ValueError('Unknown category')
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
+            raise ValueError('Invalid color')
+        colors = options(self.repo.path).get('category_colors', {})
+        save_options(self.repo.path, category_colors={**colors, name: color})
+
+    def rename_category(self, old_name, new_name, color=None):
+        import re
+        from ..preferences import options, save_options
+        from .category_palette import PALETTE
+        old_name = normalize(old_name).strip()[:40]
+        new_name = normalize(new_name).strip()[:40]
+        profile = self.profile()
+        if old_name not in profile['activities']:
+            raise ValueError('Unknown category')
+        if not new_name:
+            raise ValueError('Invalid category')
+        if new_name != old_name and new_name in profile['activities']:
+            raise ValueError('Duplicate category')
+        if color is not None and not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
+            raise ValueError('Invalid color')
+        index = profile['activities'].index(old_name)
+        if new_name != old_name:
+            profile['activities'][index] = new_name
+            self.save_profile(profile)
+        colors = dict(options(self.repo.path).get('category_colors', {}))
+        current = color or colors.get(old_name) or PALETTE[index % len(PALETTE)]
+        colors.pop(old_name, None)
+        colors[new_name] = current
+        save_options(self.repo.path, category_colors=colors)
+        return new_name
+
+    def remove_category(self, name):
+        from ..preferences import options, save_options
+        name = normalize(name).strip()[:40]
+        profile = self.profile()
+        if name in profile['activities']:
+            profile['activities'] = [item for item in profile['activities'] if item != name]
+            self.save_profile(profile)
+        colors = dict(options(self.repo.path).get('category_colors', {}))
+        colors.pop(name, None)
+        save_options(self.repo.path, category_colors=colors)
 
     def evidence(self, interval_id):
         row = self.db.execute('''SELECT i.*,s.device_id,s.platform,s.timezone,s.ended_ms,s.status AS capture_status,s.heartbeat_ms,

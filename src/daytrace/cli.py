@@ -135,7 +135,8 @@ def main(argv=None):
     parser.add_argument("--db", type=Path, default=default_database(), help="SQLite path; put this option before the command")
     sub = parser.add_subparsers(dest="command", required=True)
     ui_parser=sub.add_parser('ui', help='Open the daily diary; does not start collection')
-    ui_parser.add_argument('--legacy',action='store_true',help='Open the previous desktop UI for rollback / comparison')
+    ui_parser.add_argument('--legacy',action='store_true',help='Open the previous grid-style Tk UI for rollback / comparison')
+    ui_parser.add_argument('--tk-diary',action='store_true',help='Open the Tk diary shell (pre-Qt) instead of the default Qt shell')
     sub.add_parser('evaluate', help='Run synthetic learning evaluation in a temporary database; no desktop/network')
     start = sub.add_parser("start", help="Explicitly begin collection in this terminal; Ctrl+C stops")
     start.add_argument("--idle-seconds", type=positive, default=300)
@@ -180,8 +181,10 @@ def main(argv=None):
         if args.command == 'ui':
             if args.legacy:
                 from .personalization.ui import launch
-            else:
+            elif getattr(args, 'tk_diary', False):
                 from .personalization.diary_ui import launch
+            else:
+                from .personalization.diary_qt import launch
             launch(args.db)
         elif args.command == 'evaluate':
             from .personalization.evaluate import evaluate

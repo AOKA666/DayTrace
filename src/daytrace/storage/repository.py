@@ -64,7 +64,11 @@ class Repository:
             self.db.executescript((Path(__file__).parent / "migrations/001_activity.sql").read_text("utf-8"))
             version = 1
         if version == 1:
-            self.db.executescript((Path(__file__).parent / "migrations/002_content.sql").read_text("utf-8"))
+            root = Path(__file__).parent / "migrations"
+            self.db.executescript((root / "002_content.sql").read_text("utf-8"))
+            # New databases ship with personalization (v3) so UI can open while collector runs.
+            self.db.executescript((root / "003_personalization.sql").read_text("utf-8"))
+            version = 3
         elif version not in (2, 3, 4):
             self.db.close()
             raise RuntimeError("Unsupported database schema version.")

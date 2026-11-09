@@ -2,19 +2,43 @@
 
 ## 技术审查和实现边界
 
-保留 Windows 适配器、Engine、service、SQLite 原始区间、个人档案、历史任务、人工修订和规则。新增 diary_model / diary_canvas / diary_ui / diary_worker，UI 与后台工作分离。
+保留 Windows 适配器、Engine、service、SQLite 原始区间、个人档案、历史任务、人工修订和规则。业务层仍为 `diary_model` / `diary_worker`；**默认桌面壳为 PySide6（`diary_qt/`）**。Tk 日记壳（`diary_ui.py`）与旧版表格 UI（`ui.py`）仅作回退。
 
-本轮沿用 Python 3.12 + Tk/ttk，使用 Canvas 圆角卡片和可见区域虚拟化，没有新增运行依赖。迁移 PySide6 会增加运行时和兼容性验证成本，当前信息架构和卡片需求无需因此重写 UI 技术栈。屏幕阅读器语义、多屏 DPI 和实际视觉效果仍须单独验收。
+目标环境：**Windows、Python 3.12 x64**。需安装可选依赖 `PySide6`（见 `requirements-ui.txt` 或 `pip install "daytrace[ui]"`）。缺依赖时 `daytrace.py ui` 会提示安装命令，可用 `--tk-diary` 临时退回 Tk 日记壳。
+
+## 视觉规范（Qt 日记壳 · 2026-11-09）
+
+设计 token：`diary_theme.py`（与 Qt 共用）+ `diary_qt/theme.py`（全局 QSS）。纸感底 `#F6F7F9`、圆角 **10–12px** 按钮/输入框、hover/pressed 分层；强调色 `#3B6FE8`；无玻璃拟态与大渐变。
+
+- **壳层**：Qt 窄侧栏导航（圆角选中态）；顶栏日期胶囊、筛选、待确认、记录状态。
+- **时间线**：对标「时间日志」日记卡片——左起止时间、中 **醒目时长** + 标题/备注、右上 **分类色块**；`pitch` 约 **104px**，扁行高、横向铺满。展示前 `compact_cards` 合并同窗口短间隔（默认 **180s**）并折叠短空隙（默认 **120s**），减少碎卡与「未记录」刷屏。
+- **滚动条**：时间线/设置 `QScrollArea` 使用系统纵向滑块；时间线画布 `wheelEvent` 交给父级滚动；滑块加宽至 **12px**、最小把手 **48px**，可点击拖拽。
+- **短暂停留**：任意 **active** 时长 &lt; `min_dwell_seconds` 投影为短暂停留；默认隐藏；隐藏后对剩余卡 **`merge_after_brief_filter`**：同签名且中间仅 brief/短空隙 → 合并为一张（如微信读书多段 Chrome 标题）。
+- **设置**：标签下可滚动内容区（外边距约 20–28px）；**勿**对 `body` 设 `AlignTop`（会阻止子项横向 Expanding）；`settingsPanel` 无 max-width、`Expanding/Preferred`，底部 `addStretch` 收空白；字段随面板伸展。
+- **分类颜色**：设置 → **分类颜色** 标签；名称 + 色板/`QColorDialog`；持久化 `preferences.category_colors` 与个人档案 `activities`；默认 `DEFAULT_CATEGORY_COLORS` 首次补齐。
+- **时间线标签**：分类以色块 chip 展示（分类色底 + `contrasting_text` 字色）；「待确认」用暖色中性 chip。
+- **设置**：六分区横向标签 + `QStackedWidget` 滚动表单。
+- **字体**：Segoe UI + Microsoft YaHei UI（Qt 回退 sans-serif）。
+- **详情/确认**：`QDialog` 圆角控件，证据 `QTextEdit` 只读。
+
+Tk 日记壳（`--tk-diary`）仍保留 Canvas 实现，视觉略旧，仅供回退对比。
 
 ## 运行与回退
 
 项目目录 PowerShell：
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-ui.txt
 .\.venv\Scripts\python.exe .\daytrace.py ui
 ```
 
 默认今日页，不自动监测。用户点击开始后，明确确认标题和正文采集；截图仍遵循独立开关。由 UI 启动的采集器在关闭 UI 时先停止，外部终端启动的采集器仍由原终端管理。
+
+**采集状态显示**：Qt 壳每约 2 秒独立查询 `capture_state`（与慢速 AI `review()` 解耦；`busy` 时跳过以免与 `refresh` 争用 UI 任务池）。若在终端已对同一 `--db` 执行 `start --content`，打开 `daytrace.py ui` 后顶栏应显示「正在记录」，且再次点「开始记录」不会启动第二实例（实例锁冲突会提示 stderr 摘要）。
+
+**线程回归**：后台 `ThreadPoolExecutor` 完成回调必须通过 `JobBridge.finished`（`QObject` + `Signal`）回到 UI 线程处理 `busy` 与 `show()`；禁止在 worker `add_done_callback` 里直接 `QTimer.singleShot`，否则 `busy` 可能永不归零、时间线空白且所有操作提示「请等待」。
+
+**Schema**：新建数据库在 `Repository` 创建时直接应用个性化迁移（`user_version=3`），采集运行中 UI 可只读打开。遗留 v2 库若在采集中需升级，会提示「请先停止采集再打开日记」而非裸 `RuntimeError`。
 
 隔离示例预览：
 
@@ -25,17 +49,21 @@
 
 示例使用临时数据库，标题明确标注“合成示例数据”，禁止开启采集或云端。可加 `--seconds 3` 自动关闭。示例不是用户监测数据或真实模型响应。
 
-旧 UI 回退入口：
+回退入口：
 
 ```powershell
+# 旧版表格/色块 UI
 .\.venv\Scripts\python.exe .\daytrace.py ui --legacy
+# Tk 日记壳（未装 PySide6 或对比用）
+.\.venv\Scripts\python.exe .\daytrace.py ui --tk-diary
 ```
 
 ## 页面与交互
 
 - 侧栏：今日、历史记录、AI 复盘、设置。待确认通过时间线筛选进入，不再展示复核大表格。
 - 今日 / 历史共用纵向时间轴：起止时间、时长、具体活动名、两行以内描述、柔和分类标签、可选项目和可靠性提示。
-- 卡片使用圆角白底、浅边框、蓝色强调，主背景灰白；设置有日常、项目、学习、隐私、模型五个可滚动分区。
+- 自定义 Canvas 侧栏 + 纸感主背景；卡片白底细描边、底缘轻阴影；待确认芯片点击直达确认面板；缺口灰底卡片标题「未记录时间」等，不推断睡眠或用餐。设置五分区标签切换 + 分区滚动。
+- AI 复盘页默认展开「今日概览」折叠区；模型复盘与本地汇总均在同一时间线顶部展示，并标明授权范围。
 - 点击卡片查看证据，多片段先选择原始片段；原有纠正、忽略、私人化、撤销、删除和截图删除功能保留。
 - 相邻活动可由用户明确合并为同一任务；整组确认原子写入每个原始片段的修订与案例。拆分通过原有片段边界分别纠正归属，不支持在单个原始片段内部任意切割时间。
 - 日期前后切换、日期输入、活动名称 / 分类 / 项目搜索共用时间线。默认不把 exe 或窗口标题当作日记标题；未知显示待确认。
@@ -65,7 +93,24 @@ AI 复盘只使用当前日期授权范围内最多 100 个已有活动名称、
 
 ## 验证与未验证项
 
-自动测试覆盖默认零发送、授权下界、人工优先、取消 / 暂停 / 撤销授权 / 删除竞态、删除后重启、模型非法字段拒收、复盘失效、批量确认与边界拒绝、虚拟化和导航。真实 Tk 事件循环及 1280×800 合成预览自动退出已成功运行。没有真实采集、真实截图或真实云端请求。
+自动测试覆盖默认零发送、授权下界、人工优先、取消 / 暂停 / 撤销授权 / 删除竞态、删除后重启、模型非法字段拒收、复盘失效、批量确认与边界拒绝、虚拟化和导航；另含 `tests/test_diary_model.py`（缺口不臆测活动、待确认芯片标记）。真实 Tk 事件循环及 1280×800 合成预览自动退出已成功运行。没有真实采集、真实截图或真实云端请求。
+
+### 相对产品 brief 的差距审计（2026-11-09 续）
+
+| 领域 | 状态 |
+| --- | --- |
+| 侧栏 IA、纵向卡片、虚拟化、设置五分区 | 已实现 |
+| 归并规则（A→B→A、会话/空闲边界） | 已实现 |
+| 待确认筛选 + 卡片芯片快捷确认 | 已实现 |
+| 详情抽屉（证据、纠正、合并下一段） | 已实现（Tk 顶层窗，非侧滑动画） |
+| 后台批量 AI + 复盘内存缓存 | 已实现 |
+| 截图悬停预览 | 沿用旧逻辑；须 Windows 实机与开启截图留存 |
+| 单片段内任意时间切割 | **未实现**（仅按原始片段边界纠正） |
+| 无覆盖时段手写补录 | **未实现** |
+| 自动扩展子分类目录 | **未实现** |
+| PySide6 默认壳 | **已实现**（规则全屏编辑器暂简版，完整编辑用 `--tk-diary`） |
+| 高 DPI / 多屏 / 长列表性能 | 已加 Tk scaling 启发式；**须 Windows 人工验收** |
+| 视觉截图验收 | **未完成**（见下） |
 
 桌面工具报告 `Computer Use native pipe is unavailable`（Windows error 2），重试及备用通道均失败；未取得运行截图，也未完成视觉、鼠标滚动、多屏 DPI 人工验收。启动冒烟不等于视觉验收通过。
 
