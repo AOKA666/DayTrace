@@ -263,16 +263,15 @@ class DiaryMainWindow(QMainWindow):
         page = self.settings_pages[page_key]
         panel = QFrame()
         panel.setObjectName('settingsPanel')
-        panel.setMaximumWidth(640)
-        panel.setMinimumWidth(360)
-        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         inner = QVBoxLayout(panel)
-        inner.setContentsMargins(22, 20, 22, 22)
-        inner.setSpacing(10)
+        inner.setContentsMargins(24, 22, 24, 24)
+        inner.setSpacing(12)
         heading = QLabel(title)
         heading.setObjectName('sectionTitle')
         inner.addWidget(heading)
-        page.addWidget(panel)
+        page.addWidget(panel, 1)
+        page.addStretch(1)
         return inner
 
     def _settings_field(self, parent: QVBoxLayout, label: str) -> QLineEdit:
@@ -281,6 +280,8 @@ class DiaryMainWindow(QMainWindow):
         parent.addWidget(cap)
         entry = QLineEdit()
         entry.setObjectName('settingsField')
+        entry.setMinimumWidth(280)
+        entry.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         parent.addWidget(entry)
         return entry
 
@@ -293,6 +294,8 @@ class DiaryMainWindow(QMainWindow):
         self.description = QTextEdit()
         self.description.setObjectName('settingsArea')
         self.description.setMaximumHeight(96)
+        self.description.setMinimumWidth(280)
+        self.description.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         daily.addWidget(self.description)
         btn_row = QHBoxLayout()
         propose = QPushButton('生成日常建议')

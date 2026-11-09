@@ -125,6 +125,7 @@ QFrame#settingsPanel {{
     background: {SURFACE};
     border: 1px solid {BORDER};
     border-radius: 12px;
+    margin: 0px;
 }}
 QLabel#sectionTitle {{
     font-size: 15px;
@@ -137,7 +138,7 @@ QLabel#fieldLabel {{
     padding-top: 6px;
 }}
 QLineEdit#settingsField, QTextEdit#settingsArea {{
-    min-width: 240px;
+    min-width: 280px;
 }}
 QCheckBox {{
     spacing: 8px;
