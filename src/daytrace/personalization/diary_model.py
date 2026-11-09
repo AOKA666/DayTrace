@@ -42,10 +42,14 @@ def cards(rows):
             card['rows'].append(row)
             continue
         if not active:
-            label = {'idle': '无输入空闲', 'excluded': '私人活动', 'paused': '记录已暂停', 'locked': '设备已锁定'}.get(
-                row['state'], '未记录时间'
-            )
-            description = '仅保留时间边界，不推断这段时间做了什么。'
+            if row.get('short_gap'):
+                label = '短暂停留'
+                description = '低于当前停留阈值的片段；与相邻空隙一并折叠，不单独推断活动。'
+            else:
+                label = {'idle': '无输入空闲', 'excluded': '私人活动', 'paused': '记录已暂停', 'locked': '设备已锁定'}.get(
+                    row['state'], '未记录时间'
+                )
+                description = '仅保留时间边界，不推断这段时间做了什么。'
         elif meaningful:
             label = row.get('label') or foreground_heading(row)
             description = row.get('reason') or ''
@@ -121,6 +125,10 @@ def _merge_active_runs(items, merge_gap_ms):
     return merged
 
 
+def _gap_has_short_dwell(card):
+    return any(r.get('short_gap') for r in card.get('rows', []))
+
+
 def _absorb_micro_gaps(items, merge_gap_ms, fold_gap_ms):
     if len(items) < 2:
         return items
@@ -141,7 +149,12 @@ def _absorb_micro_gaps(items, merge_gap_ms, fold_gap_ms):
                 gap = work[index + 1]
                 gap_len = gap['end_ms'] - gap['start_ms']
                 bridge = work[index + 2]['start_ms'] - card['end_ms']
-                if gap_len <= fold_gap_ms and bridge <= merge_gap_ms and _active_signature(card) == _active_signature(work[index + 2]):
+                if (
+                    not _gap_has_short_dwell(gap)
+                    and gap_len <= fold_gap_ms
+                    and bridge <= merge_gap_ms
+                    and _active_signature(card) == _active_signature(work[index + 2])
+                ):
                     joined = _join_cards(card, work[index + 2])
                     joined['start_ms'] = card['start_ms']
                     next_pass.append(joined)
@@ -149,6 +162,10 @@ def _absorb_micro_gaps(items, merge_gap_ms, fold_gap_ms):
                     changed = True
                     continue
             if _gap_card(card) and (card['end_ms'] - card['start_ms']) <= fold_gap_ms:
+                if _gap_has_short_dwell(card):
+                    next_pass.append(card)
+                    index += 1
+                    continue
                 if next_pass and not _gap_card(next_pass[-1]):
                     next_pass[-1]['end_ms'] = card['end_ms']
                     index += 1
@@ -169,7 +186,11 @@ def _merge_gap_cards(items):
     merged = []
     for card in items:
         if merged and _gap_card(merged[-1]) and _gap_card(card) and merged[-1]['rows'][0]['state'] == card['rows'][0]['state']:
-            merged[-1] = _join_cards(merged[-1], card)
+            joined = _join_cards(merged[-1], card)
+            if _gap_has_short_dwell(joined):
+                joined['title'] = '短暂停留'
+                joined['description'] = '低于当前停留阈值的片段；与相邻空隙一并折叠，不单独推断活动。'
+            merged[-1] = joined
             continue
         merged.append(card)
     return merged
@@ -194,6 +215,37 @@ def project_dwell_threshold(rows, dwell_ms):
             )
         projected.append(item)
     return projected
+
+
+def collapse_short_gap_rows(rows):
+    """Merge consecutive non-active gap rows so brief dwell does not spam the timeline."""
+    if not rows:
+        return []
+    merged = []
+    for row in rows:
+        item = dict(row)
+        gapish = item['state'] != 'active' and item['state'] != 'excluded'
+        if (
+            merged
+            and gapish
+            and merged[-1]['state'] != 'active'
+            and merged[-1]['state'] != 'excluded'
+            and merged[-1]['end_ms'] == item['start_ms']
+        ):
+            merged[-1]['end_ms'] = item['end_ms']
+            merged[-1]['short_gap'] = merged[-1].get('short_gap') or item.get('short_gap')
+            continue
+        merged.append(item)
+    return merged
+
+
+def prepare_diary_rows(rows, dwell_ms):
+    return collapse_short_gap_rows(project_dwell_threshold(rows, dwell_ms))
+
+
+def build_display_cards(rows, dwell_ms, merge_gap_ms=DEFAULT_MERGE_GAP_MS, fold_gap_ms=DEFAULT_FOLD_GAP_MS):
+    """Presentation pipeline: dwell projection → cards → compaction."""
+    return compact_cards(cards(prepare_diary_rows(rows, dwell_ms)), merge_gap_ms, fold_gap_ms)
 
 
 def compact_cards(items, merge_gap_ms=DEFAULT_MERGE_GAP_MS, fold_gap_ms=DEFAULT_FOLD_GAP_MS):

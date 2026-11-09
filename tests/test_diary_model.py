@@ -4,7 +4,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 import unittest
 
-from daytrace.personalization.diary_model import cards, compact_cards, overview, project_dwell_threshold
+from daytrace.personalization.diary_model import (
+    build_display_cards,
+    cards,
+    compact_cards,
+    overview,
+    prepare_diary_rows,
+    project_dwell_threshold,
+)
 
 
 def _row(**overrides):
@@ -76,8 +83,33 @@ class DiaryModelTests(unittest.TestCase):
         rows = [_row(start_ms=0, end_ms=3_000, title='弹窗', label='', task_id=None)]
         projected = project_dwell_threshold(rows, 5_000)
         self.assertEqual(projected[0]['state'], 'unknown')
-        items = cards(projected)
-        self.assertEqual(items[0]['title'], '未记录时间')
+        items = cards(prepare_diary_rows(rows, 5_000))
+        self.assertEqual(items[0]['title'], '短暂停留')
+
+    def test_dwell_threshold_changes_card_count(self):
+        rows = [
+            _row(interval_id='long', start_ms=0, end_ms=120_000, title='Chrome', label='', category='', task_id=None),
+            _row(interval_id='short', start_ms=120_000, end_ms=128_000, title='通知', label='', category='', task_id=None),
+            _row(
+                interval_id='gap',
+                state='unknown',
+                start_ms=128_000,
+                end_ms=140_000,
+                label=None,
+                category='',
+                project='',
+                task_id=None,
+                title=None,
+                source='fallback',
+            ),
+        ]
+        loose = build_display_cards(rows, dwell_ms=1_000, merge_gap_ms=180_000, fold_gap_ms=120_000)
+        strict = build_display_cards(rows, dwell_ms=60_000, merge_gap_ms=180_000, fold_gap_ms=120_000)
+        loose_titles = [c['title'] for c in loose]
+        strict_titles = [c['title'] for c in strict]
+        self.assertIn('通知', loose_titles)
+        self.assertIn('短暂停留', strict_titles)
+        self.assertNotIn('通知', strict_titles)
 
     def test_compact_merges_same_window_with_short_gap(self):
         rows = [

@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..classifier import Classifier
-from ..diary_model import DEFAULT_CATEGORIES, cards, compact_cards, overview, project_dwell_threshold
+from ..diary_model import DEFAULT_CATEGORIES, build_display_cards, cards, overview
 from ..diary_worker import review, tick
 from ...preferences import diary_display_ms, options, save_dwell, save_options, validate_dwell
 from ..profile import propose_profile
@@ -504,12 +504,11 @@ class DiaryMainWindow(QMainWindow):
         def read(memory):
             raw = [dict(r, start_ms=max(start, r['start_ms']), end_ms=min(end, r['end_ms'])) for r in memory.timeline(start, end)]
             dwell_ms, merge_ms, fold_ms = diary_display_ms(self.database)
-            rows = project_dwell_threshold(raw, dwell_ms)
-            items = compact_cards(cards(rows), merge_ms, fold_ms)
-            return raw, rows, items, memory.profile(), memory.tasks(), memory.rules(), options(self.database)
+            items = build_display_cards(raw, dwell_ms, merge_ms, fold_ms)
+            return raw, items, memory.profile(), memory.tasks(), memory.rules(), options(self.database)
 
         def show(data):
-            raw, rows, items, profile, self.tasks, self.rules, config = data
+            raw, items, profile, self.tasks, self.rules, config = data
             self.rows = {r['interval_id']: r for r in raw}
             activities = profile.get('activities') or list(DEFAULT_CATEGORIES)
             self.category_colors = bootstrap_category_colors(self.database, activities)
