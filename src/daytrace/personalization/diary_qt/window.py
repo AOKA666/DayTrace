@@ -224,7 +224,6 @@ class DiaryMainWindow(QMainWindow):
             body = QVBoxLayout(inner)
             body.setContentsMargins(20, 16, 24, 28)
             body.setSpacing(16)
-            body.setAlignment(Qt.AlignmentFlag.AlignTop)
             inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             scroll_s.setWidget(inner)
             wrap = QVBoxLayout(page)
@@ -263,6 +262,7 @@ class DiaryMainWindow(QMainWindow):
         page = self.settings_pages[page_key]
         panel = QFrame()
         panel.setObjectName('settingsPanel')
+        panel.setMinimumWidth(280)
         panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         inner = QVBoxLayout(panel)
         inner.setContentsMargins(24, 22, 24, 24)
