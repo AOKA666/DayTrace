@@ -82,6 +82,9 @@ class Coordinator:
         self.dirty=True
 
     def geometry_changed(self,hwnd):
+        if self.permit and self.permit.get('auto'):
+            self.invalidate()
+            return
         if self.grant_window and self.grant_window[0]==hwnd:
             self.grant_invalid=True
             self.invalidate()
@@ -100,8 +103,12 @@ class Coordinator:
         self.invalidate(clear=True)
 
     def launch(self,source,context,now):
+        permit=self.permit
+        if permit and permit.get('auto'):
+            left,top,right,bottom=context['rect']
+            permit={**permit,'app':context['process'],'region':(0,0,right-left,bottom-top),'size':(right-left,bottom-top)}
         self.request={'source':source,'context':context,'exclude':self.exclude,
-            'exclude_windows':self.exclude_windows,'permit':self.permit,
+            'exclude_windows':self.exclude_windows,'permit':permit,
             'generation':self.generation,'event':self.engine.event_id}
         self.last_launch=now
         self.dirty=False
@@ -117,6 +124,8 @@ class Coordinator:
     def save(self,result,now):
         if not self.request or self.request['generation']!=self.generation:
             return
+        png = result.pop('image_png', None)
+        image_size = result.pop('image_size', None)
         text=normalize(result.get('text',''))
         if result['status'] not in ('success','partial','low_quality','no_text'):
             text=''
@@ -131,6 +140,17 @@ class Coordinator:
                 result.update(status='duplicate',text=None,duplicate_of=old[0])
         identifier=self.repo.content(self.engine.session,self.request['event'],now,result,
             self.generation,digest(str((self.engine.session,*key))))
+        if identifier and png and image_size and self.permit and self.permit.get('retain') and not self.grant_invalid:
+            if self.permit.get('from_preferences'):
+                from ..preferences import screenshots_enabled
+                if not screenshots_enabled(self.repo.path):
+                    self.invalidate(clear=True)
+                    self.permit=None
+                    return
+            from .desktop import matches
+            if not self.engine.paused and not self.engine.stopped and self.engine.event_id==self.request['event'] and matches(self.request['context'], self.context_reader(self.exclude,self.exclude_windows)):
+                from ..storage.screenshots import save
+                save(self.repo,self.request['event'],self.engine.session,now,png,*image_size,self.permit.get('days',7))
         if identifier and text and result['status']!='duplicate':
             if len(self.recent)>=64:
                 self.recent.pop(next(iter(self.recent)))
@@ -143,6 +163,9 @@ class Coordinator:
         key=(self.engine.event_id,obs) if obs else None
         if key!=self.key:
             self.invalidate(clear=not obs or obs.state!='active')
+            if not obs or obs.state!='active':
+                from ..storage.screenshots import cleanup
+                cleanup(self.repo)
             self.key=key
             self.stable_since=mono
             if obs and obs.state=='excluded' and self.engine.event_id:
@@ -164,7 +187,7 @@ class Coordinator:
             self.save(result,wall)
             if self.should_ocr(result,mono,current):
                 self.launch('ocr',current,mono)
-            elif self.permit and current['process'].casefold()==self.permit['app'].casefold() and result['source']=='uia' and len(normalize(result.get('text','')))<20:
+            elif self.permit and (self.permit.get('auto') or current['process'].casefold()==self.permit['app'].casefold()) and result['source']=='uia' and len(normalize(result.get('text','')))<20:
                 if self.grant_invalid:
                     self.save({'source':'ocr','status':'region_invalid'},wall)
                 elif result['status'] in ('success','no_text') and not result.get('ocr_safe'):
@@ -183,6 +206,9 @@ class Coordinator:
             return False
         if result['source']!='uia' or result['status'] not in ('success','no_text') or not result.get('ocr_safe') or len(normalize(result.get('text','')))>=20:
             return False
+        if self.permit.get('auto'):
+            left,top,right,bottom=current['rect']
+            return 0 < (right-left)*(bottom-top) <= 16_000_000 and right>left and bottom>top
         if current['process'].casefold()!=self.permit['app'].casefold():
             return False
         rect=current['rect']

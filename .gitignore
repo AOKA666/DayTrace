@@ -39,6 +39,8 @@ coverage.xml
 /logs/
 /screenshots/
 /captures/
+*.screenshots/
+*.preferences.json
 *.log
 *.log.*
 

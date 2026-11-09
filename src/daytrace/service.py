@@ -10,7 +10,12 @@ def clock():
     return time.monotonic_ns() // 1_000_000, time.time_ns() // 1_000_000
 
 
-def run(database, idle_seconds=300, exclude=None, duration=None, content=False, exclude_windows=(), permit=None):
+def run(database, idle_seconds=300, exclude=None, duration=None, content=False, exclude_windows=(), permit=None, min_dwell_seconds=None):
+    from .preferences import dwell_seconds, validate_dwell
+    dwell = dwell_seconds(database) if min_dwell_seconds is None else validate_dwell(min_dwell_seconds)
+    from .preferences import screenshots_enabled
+    if content and permit is None and screenshots_enabled(database):
+        permit={'auto':True,'retain':True,'days':7,'from_preferences':True}
     from .windows import WindowsSource
     with InstanceLock(database):
         source = WindowsSource()
@@ -25,10 +30,13 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
         collector = None
         try:
             repo = Repository(database)
+            if permit and permit.get('retain'):
+                from .storage.screenshots import migrate
+                migrate(repo)
             mono, wall = clock()
             repo.recover(wall)
             repo.cleanup(wall)
-            engine = Engine(repo, wall, mono, int(idle_seconds * 1000),min_active_ms=5000)
+            engine = Engine(repo, wall, mono, int(idle_seconds * 1000),min_active_ms=round(dwell*1000))
             if content:
                 from .content.coordinator import Coordinator
                 collector = Coordinator(repo,engine,exclude or [],exclude_windows,permit)
@@ -36,11 +44,15 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
             print("MONITORING | content="+str(content)+" | screenshots="+str(bool(permit))+" | local only; no keys, clipboard or network", flush=True)
             print(f"Database: {database.resolve()} | session: {engine.session}", flush=True)
             print("Use another terminal: pause / resume / stop. Ctrl+C stops. Idle means no input, not absence.", flush=True)
-            print('Minimum page dwell: 5 seconds; shorter visits retain anonymous timing only.',flush=True)
+            print(f'Minimum page dwell: {dwell:g} seconds; shorter visits retain anonymous gap timing only.',flush=True)
             next_poll = mono
             next_cleanup = mono + 3_600_000
             while not engine.stopped:
                 mono, wall = clock()
+                if collector and collector.permit and collector.permit.get('from_preferences') and not screenshots_enabled(database):
+                    collector.invalidate(clear=True)
+                    collector.permit=None
+                    print('SCREENSHOTS: disabled',flush=True)
                 commands = repo.db.execute("SELECT * FROM control_commands WHERE session_id=? AND acknowledged_ms IS NULL ORDER BY rowid", (engine.session,)).fetchall()
                 for command in commands:
                     if collector:

@@ -45,7 +45,7 @@ class Engine:
                 same_window = self.current and self.current.state == "active" and (self.current.app_id, self.current.window) == (observation.app_id, observation.window)
                 kind = "title_change" if same_window else "foreground_switch"
             else:
-                kind = "state_change"
+                kind = 'dwell_gap' if source == 'dwell' else "state_change"
         self.interval_id = self.repo.interval(self.session, at, at, observation.state, observation.process_name, observation.app_id, observation.title)
         self.event_id = self.repo.event(self.session, at, wall, kind, observation.state, observation.process_name, observation.app_id, observation.title, source)
         self.current = observation
@@ -79,7 +79,7 @@ class Engine:
         if not self.pending or observation!=self.pending[0]:
             self.pending=(observation,mono_ms,wall_ms,source)
         # Only anonymous timing is durable until this page reaches the threshold.
-        return self._sample(mono_ms,wall_ms,Observation('unknown'),0,source)
+        return self._sample(mono_ms,wall_ms,Observation('unknown'),0,'dwell')
 
     def _sample(self, mono_ms, wall_ms, observation, idle_for_ms=0, source="poll"):
         if self.stopped:
@@ -107,7 +107,7 @@ class Engine:
                 observation = Observation("idle")
                 if self.current != observation:
                     cutoff = max(self.origin_wall, at - idle_for_ms)
-                    self.repo.reclassify_idle(self.session, cutoff)
+                    self.repo.reclassify_idle(self.session, cutoff, self.min_active_ms)
                     # Current interval may have been split: never extend the old active part.
                     self.repo.event(self.session, at, wall_ms, "idle_detected", "idle", source=source)
                     self.current = observation

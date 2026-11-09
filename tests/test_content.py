@@ -139,6 +139,21 @@ class FakeWorker:
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_auto_permission_uses_each_foreground_window_and_cancels_resize(self):
+        self.collector.permit={'auto':True,'retain':True,'days':7}
+        result={'source':'uia','status':'no_text','ocr_safe':True}
+        self.assertTrue(self.collector.should_ocr(result,1000,self.context))
+        self.collector.launch('ocr',self.context,1000)
+        permit=FakeWorker.instances[-1].request['permit']
+        self.assertEqual(permit['app'],'test.exe')
+        self.assertEqual(permit['region'],(0,0,800,600))
+        worker=self.collector.worker
+        self.collector.geometry_changed(self.context['hwnd'])
+        self.assertTrue(worker.closed)
+        changed=dict(self.context,process='chrome.exe',rect=(0,0,3840,2160))
+        self.assertTrue(self.collector.should_ocr(result,62000,changed))
+        self.assertFalse(self.collector.should_ocr(dict(result,ocr_safe=False),62000,changed))
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
         self.repo=Repository(Path(self.temp.name)/'test.db')

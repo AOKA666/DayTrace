@@ -61,7 +61,8 @@ def capture(request):
         return {'source':'ocr','status':'not_authorized'}
     left,top,right,bottom = expected['rect']
     x,y,width,height = permit['region']
-    if (right-left,bottom-top)!=tuple(permit['size']) or min(x,y)<0 or min(width,height)<=0 or x+width>right-left or y+height>bottom-top or width*height>4_000_000:
+    max_pixels = 16_000_000 if permit.get('auto') else 4_000_000
+    if (right-left,bottom-top)!=tuple(permit['size']) or min(x,y)<0 or min(width,height)<=0 or x+width>right-left or y+height>bottom-top or width*height>max_pixels:
         return {'source':'ocr','status':'region_invalid'}
     engine = create_engine()  # Load before final checks; no image retained during loading.
     if not matches(expected,context(request['exclude'],request['exclude_windows'])):
@@ -79,7 +80,18 @@ def capture(request):
     try:
         if not matches(expected,context(request['exclude'],request['exclude_windows'])) or not unobscured(expected['hwnd'],rect):
             return {'source':'ocr','status':'stale'}
-        return recognize(engine,pixels)
+        result = recognize(engine,pixels)
+        if permit.get('retain') and result['status'] in ('success','no_text'):
+            # Only retain a fully OCR-processed image without detected sensitive text.
+            # This is best-effort; explicit safe-region permission remains mandatory.
+            from .policy import normalize, sensitive_window
+            original = ' '.join((result.get('text') or '').split())
+            if normalize(original) == original and not sensitive_window(original):
+                import mss.tools
+                if matches(expected,context(request['exclude'],request['exclude_windows'])) and unobscured(expected['hwnd'],rect):
+                    result['image_png'] = mss.tools.to_png(pixels[:,:,::-1].tobytes(), (width,height))
+                    result['image_size'] = (width,height)
+        return result
     finally:
         pixels.fill(0)
         del pixels

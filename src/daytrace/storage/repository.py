@@ -65,7 +65,7 @@ class Repository:
             version = 1
         if version == 1:
             self.db.executescript((Path(__file__).parent / "migrations/002_content.sql").read_text("utf-8"))
-        elif version != 2:
+        elif version not in (2, 3, 4):
             self.db.close()
             raise RuntimeError("Unsupported database schema version.")
         with self.db:
@@ -118,7 +118,7 @@ class Repository:
             self.db.execute("INSERT INTO content_samples(id,event_id,session_id,captured_ms,source,status,text,content_hash,duplicate_of,char_count,elapsed_ms,quality,policy_version,window_token,expires_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (identifier,event,session,captured,result['source'],result['status'],result.get('text'),result.get('content_hash'),result.get('duplicate_of'),result.get('char_count',0),result.get('elapsed_ms',0),result.get('quality'),policy_version,window_token,captured+7*86_400_000))
         return identifier
 
-    def reclassify_idle(self, session, cutoff):
+    def reclassify_idle(self, session, cutoff, min_active_ms=0):
         # Never rewrite excluded/paused/locked/unknown. Preserve foreground event facts.
         rows = self.db.execute("SELECT * FROM activity_intervals WHERE session_id=? AND state='active' AND end_ms>? ORDER BY start_ms", (session, cutoff)).fetchall()
         for row in rows:
@@ -127,10 +127,27 @@ class Repository:
             else:
                 self.db.execute("UPDATE activity_intervals SET end_ms=? WHERE id=?", (cutoff, row["id"]))
                 self.interval(session, cutoff, row["end_ms"], "idle")
+        if min_active_ms:
+            # Idle backtracking can shrink a qualified visit below the dwell threshold.
+            # Remove its identifying evidence too, rather than leaving a one-second visit.
+            short = self.db.execute("SELECT id,start_ms FROM activity_intervals WHERE session_id=? AND state='active' AND end_ms-start_ms<?", (session,min_active_ms)).fetchall()
+            version = self.db.execute('PRAGMA user_version').fetchone()[0]
+            for item in short:
+                events = [e[0] for e in self.db.execute("SELECT id FROM activity_events WHERE session_id=? AND at_ms=? AND state='active'", (session,item['start_ms']))]
+                for event in events:
+                    self.db.execute('DELETE FROM content_samples WHERE event_id=?',(event,))
+                    if version>=4:
+                        self.db.execute('DELETE FROM screenshots WHERE event_id=?',(event,))
+                    if version>=3:
+                        self.db.execute('DELETE FROM task_results WHERE event_id=?',(event,))
+                    self.db.execute("UPDATE activity_events SET kind='dwell_gap',state='unknown',title=NULL,process_name=NULL,app_id=NULL WHERE id=?",(event,))
+                self.db.execute("UPDATE activity_intervals SET state='unknown',title=NULL,process_name=NULL,app_id=NULL WHERE id=?", (item['id'],))
 
     def cleanup(self, now):
         day = 86_400_000
         with self.transaction():
+            if self.db.execute('PRAGMA user_version').fetchone()[0] >= 4:
+                self.db.execute('DELETE FROM screenshots WHERE expires_ms<=?', (now,))
             self.db.execute("DELETE FROM content_samples WHERE expires_ms<=?", (now,))
             self.db.execute("UPDATE activity_events SET title=NULL WHERE at_ms<?", (now - 7 * day,))
             self.db.execute("UPDATE activity_intervals SET title=NULL WHERE start_ms<?", (now - 7 * day,))
@@ -140,6 +157,12 @@ class Repository:
             self.db.execute("UPDATE activity_intervals SET start_ms=? WHERE start_ms<? AND end_ms>?", (cutoff, cutoff, cutoff))
             self.db.execute("DELETE FROM control_commands WHERE acknowledged_ms IS NOT NULL AND acknowledged_ms<?", (now - day,))
             self.db.execute("DELETE FROM capture_sessions WHERE ended_ms IS NOT NULL AND ended_ms<? AND NOT EXISTS (SELECT 1 FROM activity_intervals WHERE session_id=capture_sessions.id)", (cutoff,))
+            if self.db.execute('PRAGMA user_version').fetchone()[0] >= 3:
+                self.db.execute('DELETE FROM learned_rules WHERE approved=0 AND id IN (SELECT o.rule_id FROM rule_origins o JOIN activity_intervals i ON i.id=o.interval_id WHERE i.start_ms<?)', (now - 7 * day,))
+                self.db.execute('DELETE FROM analysis_runs WHERE created_ms<?', (cutoff,))
+                self.db.execute('DELETE FROM personal_tasks WHERE created_ms<? AND id NOT IN (SELECT task_id FROM task_results WHERE task_id IS NOT NULL) AND id NOT IN (SELECT task_id FROM learned_rules) AND id NOT IN (SELECT task_id FROM activity_feedback WHERE task_id IS NOT NULL)', (cutoff,))
+        from .screenshots import cleanup as clean_images
+        clean_images(self)
         self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 

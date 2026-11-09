@@ -27,6 +27,22 @@ class DwellTests(unittest.TestCase):
     def active(self):
         return self.repo.db.execute("SELECT * FROM activity_intervals WHERE state='active' ORDER BY start_ms").fetchall()
 
+    def test_custom_threshold_and_gap_marker(self):
+        self.engine.min_active_ms=8000
+        self.sample(0); self.sample(4000); self.sample(7999)
+        self.assertFalse(self.active())
+        self.assertTrue(self.repo.db.execute("SELECT 1 FROM activity_events WHERE kind='dwell_gap'").fetchone())
+        self.sample(8000)
+        self.assertEqual(len(self.active()),1)
+
+    def test_idle_backtrack_removes_subthreshold_prefix(self):
+        self.sample(0);self.sample(4000);self.sample(5000)
+        self.assertEqual(len(self.active()),1)
+        self.engine.idle_ms=5000
+        self.sample(6000,idle=5000)
+        self.assertFalse(self.active())
+        self.assertEqual(self.repo.db.execute("SELECT COUNT(*) FROM activity_events WHERE title IS NOT NULL").fetchone()[0],0)
+
     def test_under_five_seconds_has_no_page_or_content_event(self):
         self.sample(0)
         self.sample(4999)

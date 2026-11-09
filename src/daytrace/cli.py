@@ -131,16 +131,23 @@ def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description="DayTrace local Windows activity collector with opt-in UIA and local OCR (no AI or product UI)")
+    parser = argparse.ArgumentParser(description="DayTrace local activity collector and opt-in personal activity review")
     parser.add_argument("--db", type=Path, default=default_database(), help="SQLite path; put this option before the command")
     sub = parser.add_subparsers(dest="command", required=True)
+    ui_parser=sub.add_parser('ui', help='Open the daily diary; does not start collection')
+    ui_parser.add_argument('--legacy',action='store_true',help='Open the previous desktop UI for rollback / comparison')
+    sub.add_parser('evaluate', help='Run synthetic learning evaluation in a temporary database; no desktop/network')
     start = sub.add_parser("start", help="Explicitly begin collection in this terminal; Ctrl+C stops")
     start.add_argument("--idle-seconds", type=positive, default=300)
+    from .preferences import validate_dwell
+    start.add_argument('--min-dwell-seconds', type=validate_dwell, help='Minimum page dwell, 0–300 seconds; default uses UI preference (initially 5)')
     start.add_argument("--duration", type=positive, help="Stop automatically after this many seconds")
     start.add_argument("--exclude", action="append", default=[], help="Exclude executable basename or full path; repeatable")
     start.add_argument('--exclude-window',action='append',default=[],help='Exclude window titles containing this text; repeatable')
     start.add_argument('--content',action='store_true',help='Explicitly enable local visible UIA text evidence')
     start.add_argument('--screenshots',action='store_true',help='Enable OCR only with all region permission options')
+    start.add_argument('--retain-screenshots',action='store_true',help='Explicitly retain safe permitted-region screenshots for evidence review; never upload')
+    start.add_argument('--screenshot-days',type=positive,default=7,help='Screenshot retention, at most 7 days')
     start.add_argument('--ocr-app',help='One permitted executable basename')
     start.add_argument('--ocr-region',help='Explicit safe region x,y,width,height in physical pixels relative to window')
     start.add_argument('--ocr-window-size',help='Expected physical window width,height; resizing invalidates grant')
@@ -170,7 +177,16 @@ def main(argv=None):
     try:
         if sys.version_info < (3, 12):
             raise RuntimeError("Use Python 3.12 or newer.")
-        if args.command == "start":
+        if args.command == 'ui':
+            if args.legacy:
+                from .personalization.ui import launch
+            else:
+                from .personalization.diary_ui import launch
+            launch(args.db)
+        elif args.command == 'evaluate':
+            from .personalization.evaluate import evaluate
+            print(json.dumps(evaluate(), ensure_ascii=False, indent=2))
+        elif args.command == "start":
             permit=None
             if args.screenshots:
                 if not (args.content and args.ocr_app and args.ocr_region and args.ocr_window_size and args.acknowledge_safe_region):
@@ -180,10 +196,17 @@ def main(argv=None):
                 if len(region)!=4 or len(size)!=2 or min(region)<0 or min(region[2:])<=0 or min(size)<=0 or region[0]+region[2]>size[0] or region[1]+region[3]>size[1] or region[2]*region[3]>4_000_000:
                     raise RuntimeError('Invalid OCR region or window dimensions; maximum region is 4 million pixels.')
                 permit={'app':args.ocr_app,'region':region,'size':size}
+                if args.screenshot_days>7:
+                    raise RuntimeError('Screenshot retention must be at most 7 days.')
+                if args.retain_screenshots:
+                    permit.update(retain=True,days=args.screenshot_days)
+                    print(f'LOCAL SCREENSHOT RETENTION | purpose=review | application={args.ocr_app} | region={region} | days={args.screenshot_days:g} | directory={args.db}.screenshots | no upload',flush=True)
             elif args.ocr_app or args.ocr_region or args.ocr_window_size or args.acknowledge_safe_region:
                 raise RuntimeError('OCR permission options require explicit --screenshots.')
+            if args.retain_screenshots and not args.screenshots:
+                raise RuntimeError('Screenshot retention requires independent --screenshots and region permissions.')
             from .service import run
-            run(args.db, args.idle_seconds, args.exclude, args.duration,args.content,args.exclude_window,permit)
+            run(args.db, args.idle_seconds, args.exclude, args.duration,args.content,args.exclude_window,permit,min_dwell_seconds=args.min_dwell_seconds)
         elif args.command=='content':
             if not 1<=args.limit<=100000:
                 raise RuntimeError('--limit must be between 1 and 100000')
@@ -245,6 +268,16 @@ def main(argv=None):
             print("Expired titles and records removed.")
         elif args.command == "delete":
             with InstanceLock(args.db):
+                if args.db.exists():
+                    repo = Repository(args.db)
+                    try:
+                        from .storage.screenshots import enabled, cleanup
+                        if enabled(repo):
+                            with repo.transaction():
+                                repo.db.execute('DELETE FROM screenshots')
+                            cleanup(repo)
+                    finally:
+                        repo.close()
                 for path in (args.db, Path(str(args.db) + "-wal"), Path(str(args.db) + "-shm")):
                     path.unlink(missing_ok=True)
             print("Local database removed; next start creates an empty database. No physical-erasure claim.")

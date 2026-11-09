@@ -1,0 +1,14 @@
+BEGIN IMMEDIATE;
+DROP TRIGGER remove_derived_rules;
+DROP TRIGGER remove_interval_rules;
+DROP TABLE rule_origins;
+DROP TABLE activity_cases;
+DROP TABLE activity_feedback;
+DROP TABLE task_results;
+DROP TABLE learned_rules;
+DROP TABLE personal_tasks;
+DROP TABLE personal_profile;
+DROP TABLE analysis_runs;
+DROP TABLE personal_state;
+PRAGMA user_version=2;
+COMMIT;
