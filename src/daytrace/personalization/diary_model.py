@@ -197,7 +197,7 @@ def _merge_gap_cards(items):
 
 
 def project_dwell_threshold(rows, dwell_ms):
-    """Recompute diary rows for the current dwell threshold without changing stored intervals."""
+    """Any active interval shorter than dwell becomes brief dwell (display-only)."""
     dwell_ms = max(0, int(dwell_ms))
     projected = []
     for row in rows:
@@ -212,6 +212,9 @@ def project_dwell_threshold(rows, dwell_ms):
                 project='',
                 task_id=None,
                 short_gap=1,
+                reliability='unknown',
+                source='dwell_display',
+                reason='',
             )
         projected.append(item)
     return projected
@@ -243,17 +246,18 @@ def prepare_diary_rows(rows, dwell_ms):
     return collapse_short_gap_rows(project_dwell_threshold(rows, dwell_ms))
 
 
-def filter_short_dwell_cards(items, show_short_dwells=False):
+def _is_brief_dwell_card(card, dwell_ms):
+    dwell_ms = max(0, int(dwell_ms))
+    span = card['end_ms'] - card['start_ms']
+    if dwell_ms and span < dwell_ms:
+        return True
+    return _gap_card(card) and (card.get('title') == '短暂停留' or _gap_has_short_dwell(card))
+
+
+def filter_short_dwell_cards(items, show_short_dwells=False, dwell_ms=0):
     if show_short_dwells:
         return items
-    return [
-        card
-        for card in items
-        if not (
-            _gap_card(card)
-            and (card.get('title') == '短暂停留' or _gap_has_short_dwell(card))
-        )
-    ]
+    return [card for card in items if not _is_brief_dwell_card(card, dwell_ms)]
 
 
 def build_display_cards(
@@ -265,7 +269,7 @@ def build_display_cards(
 ):
     """Presentation pipeline: dwell projection → cards → compaction → optional brief-dwell filter."""
     items = compact_cards(cards(prepare_diary_rows(rows, dwell_ms)), merge_gap_ms, fold_gap_ms)
-    return filter_short_dwell_cards(items, show_short_dwells)
+    return filter_short_dwell_cards(items, show_short_dwells, dwell_ms)
 
 
 def compact_cards(items, merge_gap_ms=DEFAULT_MERGE_GAP_MS, fold_gap_ms=DEFAULT_FOLD_GAP_MS):

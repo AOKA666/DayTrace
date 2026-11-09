@@ -99,8 +99,37 @@ class DiaryModelTests(unittest.TestCase):
 
     def test_filter_short_dwell_cards_respects_flag(self):
         brief = cards(prepare_diary_rows([_row(start_ms=0, end_ms=2_000, label='', task_id=None)], 5_000))
-        self.assertEqual(len(filter_short_dwell_cards(brief, False)), 0)
-        self.assertEqual(len(filter_short_dwell_cards(brief, True)), 1)
+        self.assertEqual(len(filter_short_dwell_cards(brief, False, 5_000)), 0)
+        self.assertEqual(len(filter_short_dwell_cards(brief, True, 5_000)), 1)
+
+    def test_named_and_titled_short_active_hidden_by_default(self):
+        rows = [
+            _row(
+                interval_id='mail',
+                start_ms=0,
+                end_ms=4_000,
+                label='写邮件',
+                category='沟通',
+                task_id='t1',
+                title='Outlook — 收件箱',
+                reliability='supported',
+            ),
+            _row(
+                interval_id='popup',
+                start_ms=10_000,
+                end_ms=13_000,
+                label='',
+                category='',
+                task_id=None,
+                title='系统通知 — Windows',
+                reliability='tentative',
+            ),
+        ]
+        hidden = build_display_cards(rows, dwell_ms=5_000, show_short_dwells=False)
+        visible = build_display_cards(rows, dwell_ms=5_000, show_short_dwells=True)
+        self.assertEqual(hidden, [])
+        self.assertGreaterEqual(len(visible), 1)
+        self.assertTrue(all(c['title'] == '短暂停留' for c in visible))
 
     def test_dwell_threshold_changes_card_count(self):
         rows = [
