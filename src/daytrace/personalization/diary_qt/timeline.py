@@ -31,9 +31,8 @@ class TimelineWidget(QWidget):
     card_confirm = Signal(object)
     card_hovered = Signal(str)
 
-    pitch = 124
-    rail = 78
-    card_max_width = 580
+    pitch = 100
+    rail = 84
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -50,14 +49,11 @@ class TimelineWidget(QWidget):
         self.setMinimumHeight(h)
         self.update()
 
-    def _content_width(self) -> int:
-        return min(self.card_max_width, max(360, self.width() - self.rail - 28))
-
     def _geom(self, index):
-        y = 8 + index * self.pitch
-        left = self.rail + 10
-        right = left + self._content_width()
-        bottom = y + self.pitch - 12
+        y = 6 + index * self.pitch
+        left = self.rail + 8
+        right = max(520, self.width()) - 16
+        bottom = y + self.pitch - 8
         return left, right, y, bottom
 
     def _index_at(self, pos):
@@ -72,7 +68,7 @@ class TimelineWidget(QWidget):
             return None
         left, right, y, bottom = self._geom(index)
         chip_w = min(120, 24 + len(card['status']) * 10)
-        return QRectF(right - chip_w - 14, bottom - 26, chip_w, 24)
+        return QRectF(right - chip_w - 12, bottom - 22, chip_w, 20)
 
     def sizeHint(self):
         return super().sizeHint()
@@ -95,10 +91,10 @@ class TimelineWidget(QWidget):
 
         title_font = QFont('Microsoft YaHei UI', 10)
         title_font.setBold(True)
-        meta_font = QFont('Microsoft YaHei UI', 9)
+        meta_font = QFont('Microsoft YaHei UI', 8)
         time_font = QFont('Segoe UI', 10)
         time_font.setBold(True)
-        time_end = QFont('Segoe UI', 9)
+        time_end = QFont('Segoe UI', 8)
 
         for index in range(first, last):
             card = self.cards[index]
@@ -120,40 +116,40 @@ class TimelineWidget(QWidget):
             dot = QColor(ACCENT if active and card.get('category') else FAINT)
             painter.setBrush(dot)
             painter.setPen(QPen(QColor(BG), 2))
-            painter.drawEllipse(QPointF(rail_x, y + 22), 4, 4)
+            painter.drawEllipse(QPointF(rail_x, y + (bottom - y) // 2), 4, 4)
 
             start = datetime.fromtimestamp(card['start_ms'] / 1000)
             end = datetime.fromtimestamp(card['end_ms'] / 1000)
             painter.setFont(time_font)
             painter.setPen(QColor(INK if active else MUTED))
-            painter.drawText(QRectF(rail_x - 52, y + 8, 46, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, start.strftime('%H:%M'))
+            painter.drawText(QRectF(rail_x - 54, y + 6, 48, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, start.strftime('%H:%M'))
             painter.setFont(time_end)
             painter.setPen(QColor(FAINT))
-            painter.drawText(QRectF(rail_x - 52, y + 26, 46, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, end.strftime('%H:%M'))
+            painter.drawText(QRectF(rail_x - 54, y + 22, 48, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, end.strftime('%H:%M'))
 
             painter.setFont(title_font)
             painter.setPen(QColor(INK if active else MUTED))
-            title_w = int(right - left - 92)
+            title_w = int(right - left - 96)
             title = painter.fontMetrics().elidedText(card['title'], Qt.TextElideMode.ElideRight, title_w)
-            painter.drawText(QRectF(left + 12, y + 10, title_w, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
+            painter.drawText(QRectF(left + 10, y + 6, title_w, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
 
             painter.setFont(meta_font)
             painter.setPen(QColor(FAINT))
             dur = duration(card['end_ms'] - card['start_ms'])
-            painter.drawText(QRectF(right - 88, y + 12, 76, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, dur)
+            painter.drawText(QRectF(right - 84, y + 8, 72, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, dur)
 
             painter.setPen(QColor(MUTED if active else FAINT))
-            desc_w = int(right - left - 28)
+            desc_w = int(right - left - 24)
             desc = painter.fontMetrics().elidedText(card['description'], Qt.TextElideMode.ElideRight, desc_w)
-            painter.drawText(QRectF(left + 12, y + 34, desc_w, 32), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, desc)
+            painter.drawText(QRectF(left + 10, y + 26, desc_w, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, desc)
 
-            foot = bottom - 20
-            cx = left + 12
+            foot = bottom - 17
+            cx = left + 10
             category = card.get('category') or ''
             if category:
                 color = category_color(category, self.colors)
                 pill_w = min(96, 14 + len(category) * 11)
-                pill = QRectF(cx, foot, pill_w, 20)
+                pill = QRectF(cx, foot, pill_w, 17)
                 painter.setPen(QPen(QColor(BORDER), 1))
                 painter.setBrush(QColor('#F4F6FA'))
                 painter.drawRoundedRect(pill, 6, 6)

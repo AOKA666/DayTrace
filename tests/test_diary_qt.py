@@ -21,8 +21,7 @@ class DiaryQtTests(unittest.TestCase):
             if 'libEGL' in str(exc) or 'libxkbcommon' in str(exc):
                 self.skipTest('Qt platform libraries unavailable in this environment')
             raise
-        self.assertEqual(TimelineWidget.pitch, 124)
-        self.assertEqual(TimelineWidget.card_max_width, 580)
+        self.assertEqual(TimelineWidget.pitch, 100)
 
     def test_install_hint_module(self):
         from daytrace.personalization.diary_qt import INSTALL_HINT
