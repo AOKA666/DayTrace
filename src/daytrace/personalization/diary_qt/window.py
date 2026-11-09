@@ -1,0 +1,789 @@
+"""PySide6 diary main window."""
+from __future__ import annotations
+
+import json
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDialog,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QStackedWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..classifier import Classifier
+from ..diary_model import DEFAULT_CATEGORIES, cards, overview
+from ..diary_worker import review, tick
+from ..preferences import options, save_options
+from ..profile import propose_profile
+from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
+from ..store import Memory
+from ..timeline_view import PALETTE
+from .dialogs import ConfirmDialog, DetailDialog, FragmentDialog
+from .theme import ACCENT, BG, BORDER, MUTED, NAV_ITEMS, SURFACE
+from .timeline import TimelineWidget
+
+
+class DiaryMainWindow(QMainWindow):
+    def __init__(self, database: Path, preview_mode=False):
+        super().__init__()
+        self.database = database
+        self.preview_mode = preview_mode
+        self.page = '今日'
+        self.only_review = False
+        self.all_cards: list = []
+        self.rows: dict = {}
+        self.tasks: list = []
+        self.rules: list = []
+        self.category_colors: dict = {}
+        self.busy = False
+        self.closed = False
+        self.recording = 'stopped'
+        self.ai_future = None
+        self.ai_cancel = None
+        self.review_cache = None
+        self.next_ai = 0
+        self.collector_process = None
+        self.hover_id = ''
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='daytrace-qt')
+        self.ai_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='daytrace-qt-ai')
+        self.preview_popup = None
+
+        self.setWindowTitle('DayTrace · AI 时间日记' + (' · 合成示例' if preview_mode else ''))
+        self.setMinimumSize(1080, 680)
+        self.resize(1320, 820)
+
+        root = QWidget()
+        self.setCentralWidget(root)
+        outer = QHBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        side = QFrame()
+        side.setFixedWidth(172)
+        side.setStyleSheet(f'background:{BG}; border-right:1px solid {BORDER};')
+        side_col = QVBoxLayout(side)
+        side_col.setContentsMargins(14, 22, 14, 22)
+        brand = QLabel('DayTrace')
+        brand.setFont(QFont('Segoe UI', 14, QFont.Weight.Bold))
+        side_col.addWidget(brand)
+        sub = QLabel('时间日记')
+        sub.setObjectName('caption')
+        side_col.addWidget(sub)
+        side_col.addSpacing(18)
+        self.nav_buttons: dict[str, QPushButton] = {}
+        for name, symbol in NAV_ITEMS:
+            btn = QPushButton(f'  {symbol}   {name}')
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda checked=False, n=name: self.navigate(n))
+            side_col.addWidget(btn)
+            self.nav_buttons[name] = btn
+        side_col.addStretch()
+        side_col.addWidget(QLabel('本地保存\n随时纠正'))
+        outer.addWidget(side)
+
+        main = QVBoxLayout()
+        main.setContentsMargins(28, 22, 28, 22)
+        main_col = QWidget()
+        main_col.setLayout(main)
+        outer.addWidget(main_col, stretch=1)
+
+        top = QHBoxLayout()
+        self.heading = QLabel('今天')
+        self.heading.setObjectName('title')
+        top.addWidget(self.heading)
+        top.addStretch()
+        self.capture_state = QLabel('未开始记录')
+        self.capture_state.setObjectName('caption')
+        top.addWidget(self.capture_state)
+        self.capture_button = QPushButton('开始记录')
+        self.capture_button.setObjectName('accent')
+        self.capture_button.clicked.connect(self.toggle_capture)
+        top.addWidget(self.capture_button)
+        main.addLayout(top)
+
+        tool = QHBoxLayout()
+        date_capsule = QFrame()
+        date_capsule.setObjectName('dateCapsule')
+        date_row = QHBoxLayout(date_capsule)
+        date_row.setContentsMargins(8, 4, 8, 4)
+        prev = QPushButton('‹')
+        prev.setObjectName('ghost')
+        prev.setFixedWidth(36)
+        prev.clicked.connect(lambda: self.shift_day(-1))
+        self.date = QLineEdit(datetime.now().strftime('%Y-%m-%d'))
+        self.date.setFixedWidth(108)
+        self.date.returnPressed.connect(self.refresh)
+        nxt = QPushButton('›')
+        nxt.setObjectName('ghost')
+        nxt.setFixedWidth(36)
+        nxt.clicked.connect(lambda: self.shift_day(1))
+        date_row.addWidget(prev)
+        date_row.addWidget(self.date)
+        date_row.addWidget(nxt)
+        tool.addWidget(date_capsule)
+        tool.addStretch()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText('筛选活动、分类、项目')
+        self.search.setFixedWidth(200)
+        self.search.textChanged.connect(self.filter_cards)
+        tool.addWidget(self.search)
+        self.pending_btn = QPushButton('待确认 0')
+        self.pending_btn.setObjectName('ghost')
+        self.pending_btn.clicked.connect(self.toggle_review)
+        tool.addWidget(self.pending_btn)
+        main.addLayout(tool)
+
+        self.stack = QStackedWidget()
+        main.addWidget(self.stack, stretch=1)
+
+        timeline_page = QWidget()
+        tl = QVBoxLayout(timeline_page)
+        summary = QFrame()
+        summary.setObjectName('summaryCard')
+        sum_col = QVBoxLayout(summary)
+        head = QHBoxLayout()
+        head.addWidget(QLabel('今日概览'))
+        head.addStretch()
+        self.summary_toggle = QPushButton('收起')
+        self.summary_toggle.setObjectName('ghost')
+        self.summary_toggle.clicked.connect(self.collapse_summary)
+        head.addWidget(self.summary_toggle)
+        sum_col.addLayout(head)
+        self.summary_label = QLabel('活动还在整理中。')
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setObjectName('caption')
+        sum_col.addWidget(self.summary_label)
+        tl.addWidget(summary)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        self.timeline = TimelineWidget()
+        scroll.setWidget(self.timeline)
+        tl.addWidget(scroll, stretch=1)
+        self.stack.addWidget(timeline_page)
+
+        settings_page = QWidget()
+        set_outer = QVBoxLayout(settings_page)
+        tab_row = QHBoxLayout()
+        self.settings_stack = QStackedWidget()
+        self.settings_tabs: dict[str, QPushButton] = {}
+        labels = ['我的日常', '当前项目', '识别与学习', '采集与隐私', '模型与高级']
+        self.settings_pages: dict[str, QWidget] = {}
+        for label in labels:
+            btn = QPushButton(label)
+            btn.setObjectName('ghost')
+            btn.clicked.connect(lambda checked=False, name=label: self.show_settings(name))
+            tab_row.addWidget(btn)
+            self.settings_tabs[label] = btn
+            page, body = QWidget(), QVBoxLayout()
+            scroll_s = QScrollArea()
+            scroll_s.setWidgetResizable(True)
+            inner = QWidget()
+            inner.setLayout(body)
+            scroll_s.setWidget(inner)
+            wrap = QVBoxLayout(page)
+            wrap.addWidget(scroll_s)
+            self.settings_stack.addWidget(page)
+            self.settings_pages[label] = body
+        set_outer.addLayout(tab_row)
+        set_outer.addWidget(self.settings_stack)
+        self.stack.addWidget(settings_page)
+        self._build_settings()
+        self.show_settings('我的日常')
+
+        self.timeline.card_clicked.connect(self.open_card)
+        self.timeline.card_confirm.connect(self.quick_confirm)
+        self.timeline.card_hovered.connect(self.on_hover_id)
+
+        self._bg_timer = QTimer(self)
+        self._bg_timer.timeout.connect(self.background)
+        self._bg_timer.start(2000)
+
+        if preview_mode:
+            self.capture_button.setEnabled(False)
+
+        self.refresh(load_profile=True)
+        self.navigate('今日', refresh=False)
+
+    def _build_settings(self):
+        daily = self.settings_pages['我的日常']
+        daily.addWidget(QLabel('让 DayTrace 更了解你'))
+        self.description = QTextEdit()
+        self.description.setMaximumHeight(120)
+        daily.addWidget(self.description)
+        propose = QPushButton('生成日常建议')
+        propose.setObjectName('ghost')
+        propose.clicked.connect(self.propose)
+        daily.addWidget(propose)
+        self.fields: dict[str, QLineEdit] = {}
+        for key, label in [
+            ('activities', '活动分类（逗号分隔）'),
+            ('hours', '常用时间（可选）'),
+            ('workflow', '活动说明（可选）'),
+        ]:
+            daily.addWidget(QLabel(label))
+            entry = QLineEdit()
+            daily.addWidget(entry)
+            self.fields[key] = entry
+        save_d = QPushButton('保存个人档案')
+        save_d.setObjectName('accent')
+        save_d.clicked.connect(self.save_profile)
+        daily.addWidget(save_d)
+        colors = QPushButton('分类颜色')
+        colors.setObjectName('ghost')
+        colors.clicked.connect(self.category_dialog)
+        daily.addWidget(colors)
+
+        projects = self.settings_pages['当前项目']
+        for key, label in [('projects', '项目名称（逗号分隔）'), ('software', '常用软件'), ('websites', '常用网站')]:
+            projects.addWidget(QLabel(label))
+            entry = QLineEdit()
+            projects.addWidget(entry)
+            self.fields[key] = entry
+        save_p = QPushButton('保存个人档案')
+        save_p.setObjectName('accent')
+        save_p.clicked.connect(self.save_profile)
+        projects.addWidget(save_p)
+
+        learning = self.settings_pages['识别与学习']
+        learning.addWidget(QLabel('AI 自动整理'))
+        self.auto_ai = QCheckBox('允许后台 AI 分析新活动')
+        self.auto_ai.toggled.connect(self.toggle_ai)
+        learning.addWidget(self.auto_ai)
+        self.ai_note = QLabel('未开启 · 无云端发送')
+        self.ai_note.setObjectName('caption')
+        self.ai_note.setWordWrap(True)
+        learning.addWidget(self.ai_note)
+        for text, slot in [
+            ('重试待识别活动', self.retry_ai),
+            ('管理学习规则', self.rule_dialog),
+            ('查看纠正记录', self.show_history),
+            ('查看规则建议', self.suggest_rules),
+            ('导出个人记忆', self.export),
+            ('删除个人记忆', self.forget),
+        ]:
+            btn = QPushButton(text)
+            btn.setObjectName('ghost')
+            btn.clicked.connect(slot)
+            learning.addWidget(btn)
+
+        privacy = self.settings_pages['采集与隐私']
+        privacy.addWidget(QLabel('短暂停留阈值（秒）'))
+        self.dwell = QLineEdit('5')
+        self.dwell.setFixedWidth(80)
+        privacy.addWidget(self.dwell)
+        t = QPushButton('保存阈值')
+        t.setObjectName('ghost')
+        t.clicked.connect(self.save_capture_preferences)
+        privacy.addWidget(t)
+        self.capture_enabled = QCheckBox('开启本地截图证据')
+        self.capture_enabled.toggled.connect(self.save_screenshots)
+        privacy.addWidget(self.capture_enabled)
+        privacy.addWidget(
+            QLabel(
+                '仅前台窗口，排除规则优先。截图目录最多 7 天，不上传。\n'
+                '默认不采集、不截图、不发送云端。'
+            )
+        )
+
+        advanced = self.settings_pages['模型与高级']
+        advanced.addWidget(QLabel('服务地址'))
+        self.endpoint = QLineEdit(DEEPSEEK_ENDPOINT)
+        advanced.addWidget(self.endpoint)
+        advanced.addWidget(QLabel('模型名称'))
+        self.model = QLineEdit(DEEPSEEK_MODEL)
+        advanced.addWidget(self.model)
+        for text, slot in [
+            ('保存模型配置', self.save_model),
+            ('设置密钥', self.set_key),
+            ('删除密钥', self.delete_key),
+        ]:
+            b = QPushButton(text)
+            b.setObjectName('ghost')
+            b.clicked.connect(slot)
+            advanced.addWidget(b)
+
+    def _style_nav(self):
+        for name, btn in self.nav_buttons.items():
+            btn.setObjectName('navActive' if name == self.page else 'nav')
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def show_settings(self, name):
+        index = list(self.settings_pages).index(name)
+        self.settings_stack.setCurrentIndex(index)
+        for label, btn in self.settings_tabs.items():
+            btn.setObjectName('navActive' if label == name else 'ghost')
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def navigate(self, page, refresh=True):
+        self.page = page
+        self.only_review = False
+        self._style_nav()
+        self.stack.setCurrentIndex(0 if page != '设置' else 1)
+        self.heading.setText({'今日': '今天', '历史记录': '历史', 'AI 复盘': '复盘'}.get(page, '今天'))
+        if page == '今日':
+            self.date.setText(datetime.now().strftime('%Y-%m-%d'))
+        if page == 'AI 复盘':
+            self.summary_label.show()
+        if refresh:
+            self.refresh()
+
+    def shift_day(self, delta):
+        try:
+            day = datetime.strptime(self.date.text(), '%Y-%m-%d') + timedelta(days=delta)
+        except ValueError:
+            return
+        self.date.setText(day.strftime('%Y-%m-%d'))
+        self.refresh()
+
+    def collapse_summary(self):
+        hidden = not self.summary_label.isVisible()
+        self.summary_label.setVisible(hidden)
+        self.summary_toggle.setText('展开' if not hidden else '收起')
+
+    def toggle_review(self):
+        self.only_review = not self.only_review
+        extra = ' · 仅看待确认' if self.only_review else ''
+        count = sum(c['review'] for c in self.all_cards)
+        self.pending_btn.setText(f'待确认 {count}{extra}')
+        self.filter_cards()
+
+    def run_job(self, fn, callback=None, quiet=False):
+        if self.busy:
+            if not quiet:
+                QMessageBox.information(self, '正在处理', '请等待当前操作完成。')
+            return
+
+        def work():
+            memory = Memory(self.database, cleanup=not quiet)
+            try:
+                return fn(memory)
+            finally:
+                memory.close()
+
+        self.busy = True
+
+        def done(future):
+            self.busy = False
+            try:
+                value = future.result()
+                if callback:
+                    callback(value)
+            except Exception:
+                if not quiet:
+                    QMessageBox.critical(self, '操作未完成', '请检查数据库状态；隐私操作前请停止采集。')
+
+        fut = self.executor.submit(work)
+        fut.add_done_callback(lambda f: QTimer.singleShot(0, lambda: done(f)))
+
+    def refresh(self, load_profile=False, quiet=False):
+        try:
+            day = datetime.strptime(self.date.text(), '%Y-%m-%d')
+        except ValueError:
+            if not quiet:
+                QMessageBox.critical(self, '日期', '请输入 YYYY-MM-DD')
+            return
+        start = int(day.timestamp() * 1000)
+        end = int((day + timedelta(days=1)).timestamp() * 1000)
+
+        def read(memory):
+            rows = [dict(r, start_ms=max(start, r['start_ms']), end_ms=min(end, r['end_ms'])) for r in memory.timeline(start, end)]
+            return rows, cards(rows), memory.profile(), memory.tasks(), memory.rules(), options(self.database)
+
+        def show(data):
+            rows, items, profile, self.tasks, self.rules, config = data
+            self.rows = {r['interval_id']: r for r in rows}
+            self.category_colors = config.get('category_colors', {})
+            self.all_cards = items
+            text = overview(items)
+            if self.review_cache:
+                current = {
+                    r['interval_id']: (r['label'], r['category'], r['project'], (r['end_ms'] - r['start_ms']) // 1000, r['reliability'], r['revision'])
+                    for r in rows
+                    if r['state'] == 'active'
+                }
+                if all(current.get(i) == v for i, v in self.review_cache['facts'].items()):
+                    text = 'AI 复盘 · 已授权活动（最多 100 段）\n' + self.review_cache['text']
+                else:
+                    self.review_cache = None
+            self.summary_label.setText(text)
+            count = sum(c['review'] for c in items)
+            self.pending_btn.setText(f'待确认 {count}' + (' · 仅看待确认' if self.only_review else ''))
+            self.filter_cards()
+            if load_profile:
+                if not profile['activities']:
+                    profile = dict(profile, activities=list(DEFAULT_CATEGORIES))
+                self.fill_profile(profile)
+                self.dwell.setText(str(config.get('min_dwell_seconds', 5)))
+                self.capture_enabled.setChecked(config.get('screenshots_enabled') is True)
+                self.auto_ai.setChecked(config.get('auto_ai') is True)
+                if config.get('ai_endpoint'):
+                    self.endpoint.setText(config['ai_endpoint'])
+                if config.get('ai_model'):
+                    self.model.setText(config['ai_model'])
+
+        self.run_job(read, show, quiet=quiet)
+
+    def filter_cards(self):
+        query = self.search.text().strip().casefold()
+        shown = [
+            c
+            for c in self.all_cards
+            if (not self.only_review or c['review'])
+            and (not query or query in (c['title'] + ' ' + c['category'] + ' ' + c['project']).casefold())
+        ]
+        self.timeline.set_cards(shown, self.category_colors)
+
+    def quick_confirm(self, card):
+        if card['rows'][0]['state'] != 'active':
+            return
+        self.confirm_cards([card])
+
+    def open_card(self, card):
+        if len(card['rows']) == 1:
+            row = card['rows'][0]
+            if row['state'] != 'active':
+                QMessageBox.information(self, '时间记录', card['description'])
+                return
+            self.run_job(lambda m: m.evidence(row['interval_id']), lambda ev: self._detail(row, ev))
+            return
+        dialog = FragmentDialog(self, card)
+        code = dialog.exec()
+        if code == 2 and dialog.selected_row:
+            row = dialog.selected_row
+            self.run_job(lambda m: m.evidence(row['interval_id']), lambda ev: self._detail(row, ev))
+        elif code == QDialog.DialogCode.Accepted:
+            self.confirm_cards([card])
+
+    def confirm_cards(self, items):
+        dialog = ConfirmDialog(self, items[0]['title'], items[0]['category'], items[0]['project'])
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        label, category, project = dialog.values()
+        if not label:
+            return
+        ids = [r['interval_id'] for item in items for r in item['rows']]
+
+        def work(memory):
+            Classifier(memory).analyze(ids)
+            memory.feedback_many(ids, label, category, project, remember=True)
+
+        self.ai_cancel and self.ai_cancel.set()
+        self.review_cache = None
+        self.run_job(work, lambda _: self.refresh())
+
+    def _detail(self, row, evidence):
+        if not evidence:
+            QMessageBox.information(self, '证据不可用', '活动尚未结束或证据已删除。')
+            return
+
+        def submit(action, label, category, project, remember):
+            def work(memory):
+                if action == 'delete':
+                    memory.delete_interval(row['interval_id'])
+                    memory.repo.cleanup(memory.now())
+                    return
+                Classifier(memory).analyze([row['interval_id']])
+                memory.feedback(row['interval_id'], label, category, project, action, remember)
+                memory.repo.cleanup(memory.now())
+
+            self.ai_cancel and self.ai_cancel.set()
+            self.review_cache = None
+            self.run_job(work, lambda _: self.refresh())
+
+        DetailDialog(self, row, evidence, self.tasks, submit).exec()
+
+    def fill_profile(self, profile):
+        self.description.setPlainText(profile.get('description', ''))
+        for key, entry in self.fields.items():
+            value = profile.get(key, '')
+            entry.setText('，'.join(value) if isinstance(value, list) else str(value))
+
+    def propose(self):
+        self.fill_profile(propose_profile(self.description.toPlainText()))
+
+    def save_profile(self):
+        profile = {'description': self.description.toPlainText()}
+        for key, entry in self.fields.items():
+            value = entry.text()
+            profile[key] = (
+                [x.strip() for x in value.replace('，', ',').split(',') if x.strip()]
+                if key in ('activities', 'projects', 'software', 'websites')
+                else value
+            )
+        self.run_job(lambda m: m.save_profile(profile), lambda _: self.refresh())
+
+    def save_capture_preferences(self):
+        from ..preferences import save_dwell
+
+        self.run_job(lambda m: save_dwell(self.database, self.dwell.text()))
+
+    def save_screenshots(self):
+        self.run_job(lambda m: save_options(self.database, screenshots_enabled=self.capture_enabled.isChecked()))
+
+    def save_model(self):
+        endpoint, model = self.endpoint.text().strip(), self.model.text().strip()
+        try:
+            TextProvider(endpoint, model)
+        except Exception:
+            QMessageBox.critical(self, '模型配置', '请输入有效的 HTTPS 地址和模型名称。')
+            return
+        self.auto_ai.setChecked(False)
+        self.run_job(
+            lambda m: save_options(self.database, ai_endpoint=endpoint, ai_model=model, auto_ai=False),
+            lambda _: self.ai_note.setText('模型配置已保存，请重新开启后台分析。'),
+        )
+
+    def toggle_ai(self, enabled):
+        if self.preview_mode:
+            self.auto_ai.setChecked(False)
+            return
+        if self.busy:
+            self.auto_ai.setChecked(not enabled)
+            return
+        if enabled and QMessageBox.question(
+            self,
+            '开启后台 AI 分析',
+            f'发送到：{self.endpoint.text().strip()}\n模型：{self.model.text().strip()}\n'
+            '将发送开启后产生的活动标题与脱敏正文；不发送截图。\n是否开启？',
+        ) != QMessageBox.StandardButton.Yes:
+            self.auto_ai.setChecked(False)
+            return
+        since = time.time_ns() // 1_000_000
+        self.run_job(
+            lambda m: save_options(
+                self.database,
+                auto_ai=enabled,
+                ai_since_ms=since,
+                ai_endpoint=self.endpoint.text().strip(),
+                ai_model=self.model.text().strip(),
+            ),
+            lambda _: self.ai_note.setText('已开启 · 后台批量整理新活动' if enabled else '已关闭 · 无云端发送'),
+        )
+        self.next_ai = 0
+        self.review_cache = None
+
+    def retry_ai(self):
+        self.next_ai = 0
+        self.ai_note.setText('将在下一轮重试授权范围内的待识别活动。')
+
+    def category_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle('添加分类')
+        lay = QVBoxLayout(dialog)
+        name = QLineEdit()
+        lay.addWidget(QLabel('分类名称'))
+        lay.addWidget(name)
+        chosen = {'color': PALETTE[0]}
+        row = QHBoxLayout()
+        for color in PALETTE:
+            b = QPushButton('●')
+            b.setStyleSheet(f'background:{color}; color:white; border-radius:8px;')
+            b.clicked.connect(lambda checked=False, c=color: chosen.update(color=c))
+            row.addWidget(b)
+        lay.addLayout(row)
+        ok = QPushButton('保存分类')
+        ok.setObjectName('accent')
+
+        def save():
+            label = name.text().strip()
+            if not label:
+                return
+            dialog.accept()
+            self.run_job(lambda m: m.add_category(label, chosen['color']), lambda _: self.refresh())
+
+        ok.clicked.connect(save)
+        lay.addWidget(ok)
+        dialog.exec()
+
+    def rule_dialog(self):
+        QMessageBox.information(
+            self,
+            '学习规则',
+            '完整规则编辑界面仍可通过 `daytrace.py ui --tk-diary` 打开 Tk 壳。\n'
+            '此处仅列出已有规则数量：' + str(len(self.rules)),
+        )
+
+    def show_history(self):
+        def show(rows):
+            text = '\n\n'.join(
+                f"{datetime.fromtimestamp(r['created_ms']/1000):%Y-%m-%d %H:%M} · {r['action']} · {r['label'] or '—'}\n片段 {r['interval_id']}"
+                for r in rows
+            ) or '暂无纠正记录'
+            QMessageBox.information(self, '近期人工纠正', text)
+
+        self.run_job(lambda m: m.history(), show)
+
+    def suggest_rules(self):
+        def show(suggestions):
+            if not suggestions:
+                QMessageBox.information(self, '规则建议', '还没有足够多、内容相似的已保存纠正。')
+                return
+            tasks = {t['id']: t for t in self.tasks}
+            text = '\n\n'.join(
+                tasks[s['task_id']]['label'] + '\n' + json.dumps(s['conditions'], ensure_ascii=False)
+                for s in suggestions
+            )
+            if QMessageBox.question(self, '保存为未批准规则？', text[:1200]) == QMessageBox.StandardButton.Yes:
+
+                def work(memory):
+                    for s in suggestions:
+                        memory.save_rule(s['task_id'], s['conditions'], approved=False, origins=s['origins'])
+
+                self.run_job(work, lambda _: self.refresh())
+
+        self.run_job(lambda m: m.suggestions(), show)
+
+    def export(self):
+        path, _ = QFileDialog.getSaveFileName(self, '导出个人记忆', '', 'JSON (*.json)')
+        if not path:
+            return
+        self.run_job(lambda m: Path(path).write_text(json.dumps(m.export(), ensure_ascii=False, indent=2), encoding='utf-8'))
+
+    def forget(self):
+        if QMessageBox.question(self, '删除个人记忆', '删除档案、任务、案例和规则；原始采集保留。') == QMessageBox.StandardButton.Yes:
+            self.review_cache = None
+            self.run_job(lambda m: m.forget(), lambda _: self.refresh())
+
+    def set_key(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle('设置服务密钥')
+        lay = QVBoxLayout(dialog)
+        entry = QLineEdit()
+        entry.setEchoMode(QLineEdit.EchoMode.Password)
+        lay.addWidget(QLabel('密钥仅写入 Windows Credential Manager'))
+        lay.addWidget(entry)
+        ok = QPushButton('保存密钥')
+        ok.setObjectName('accent')
+        endpoint = self.endpoint.text().strip()
+
+        def save():
+            key = entry.text()
+            entry.clear()
+            dialog.accept()
+            self.run_job(lambda m: Vault(endpoint).put(key))
+
+        ok.clicked.connect(save)
+        lay.addWidget(ok)
+        dialog.exec()
+
+    def delete_key(self):
+        self.review_cache = None
+        self.run_job(lambda m: Vault(self.endpoint.text().strip()).delete())
+
+    def toggle_capture(self):
+        if self.preview_mode:
+            return
+        self.review_cache = None
+        if self.recording == 'stopped':
+            if QMessageBox.question(self, '开始记录', '记录前台应用、窗口标题和可读正文。现在开始？') != QMessageBox.StandardButton.Yes:
+                return
+            import subprocess
+
+            source_root = Path(__file__).resolve().parents[3]
+            entry = [str(source_root / 'daytrace.py')] if (source_root / 'daytrace.py').is_file() else ['-m', 'daytrace']
+            launch = dict(cwd=str(source_root))
+            if sys.platform == 'win32':
+                launch['creationflags'] = subprocess.CREATE_NO_WINDOW
+            self.collector_process = subprocess.Popen(
+                [sys.executable, *entry, '--db', str(self.database), 'start', '--content'],
+                **launch,
+            )
+        else:
+            from ..cli import control
+
+            command = 'resume' if self.recording == 'paused' else 'pause'
+            self.run_job(lambda m: control(self.database, command))
+
+    def on_hover_id(self, interval_id):
+        self.hover_id = interval_id
+
+    def background(self):
+        if self.closed:
+            return
+        if self.ai_future and self.ai_future.done():
+            try:
+                result = self.ai_future.result()
+                self.recording = result['state']
+                self.capture_state.setText({'running': '正在记录', 'paused': '已暂停', 'stopped': '未开始记录'}[self.recording])
+                self.capture_button.setText({'running': '暂停', 'paused': '恢复', 'stopped': '开始记录'}[self.recording])
+                if result.get('note'):
+                    self.ai_note.setText(result['note'])
+                if result.get('cooldown'):
+                    self.next_ai = time.monotonic() + result['cooldown']
+                if result.get('review') and result['review'].get('text'):
+                    self.review_cache = result['review']
+                    if not self.busy:
+                        self.refresh(quiet=True)
+            except Exception:
+                self.ai_note.setText('后台整理暂不可用，原始记录已保留。')
+            self.ai_future = None
+        if self.ai_future is None and not self.busy and not self.preview_mode:
+            self.ai_cancel = threading.Event()
+            analyze = time.monotonic() >= self.next_ai
+            if analyze:
+                self.next_ai = time.monotonic() + 60
+            try:
+                day = datetime.strptime(self.date.text(), '%Y-%m-%d')
+            except ValueError:
+                day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            start = int(day.timestamp() * 1000)
+            end = int((day + timedelta(days=1)).timestamp() * 1000)
+            previous = self.review_cache['key'] if self.review_cache else None
+            cancel = self.ai_cancel
+
+            def work():
+                result = tick(self.database, cancel, analyze)
+                if analyze and not result.get('cooldown'):
+                    result['review'] = review(self.database, cancel, start, end, previous)
+                return result
+
+            self.ai_future = self.ai_executor.submit(work)
+
+    def closeEvent(self, event):
+        self.closed = True
+        if self.collector_process and self.collector_process.poll() is None:
+            from ..cli import control
+
+            try:
+                control(self.database, 'stop')
+            except Exception:
+                QMessageBox.warning(self, '尚未退出', '停止采集未成功，请稍后重试退出。')
+                event.ignore()
+                return
+        self.ai_executor.shutdown(wait=False, cancel_futures=True)
+        self.executor.shutdown(wait=False, cancel_futures=True)
+        event.accept()
+
+
+def run_app(database: Path, preview_mode=False):
+    app = QApplication.instance() or QApplication(sys.argv)
+    from .theme import STYLESHEET
+
+    app.setStyleSheet(STYLESHEET)
+    window = DiaryMainWindow(database, preview_mode=preview_mode)
+    window.show()
+    return app, window

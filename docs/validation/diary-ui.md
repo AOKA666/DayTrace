@@ -2,25 +2,28 @@
 
 ## 技术审查和实现边界
 
-保留 Windows 适配器、Engine、service、SQLite 原始区间、个人档案、历史任务、人工修订和规则。新增 diary_model / diary_canvas / diary_ui / diary_worker，UI 与后台工作分离。
+保留 Windows 适配器、Engine、service、SQLite 原始区间、个人档案、历史任务、人工修订和规则。业务层仍为 `diary_model` / `diary_worker`；**默认桌面壳为 PySide6（`diary_qt/`）**。Tk 日记壳（`diary_ui.py`）与旧版表格 UI（`ui.py`）仅作回退。
 
-本轮沿用 Python 3.12 + Tk/ttk，使用 Canvas 圆角卡片和可见区域虚拟化，没有新增运行依赖。迁移 PySide6 会增加运行时和兼容性验证成本，当前信息架构和卡片需求无需因此重写 UI 技术栈。屏幕阅读器语义、多屏 DPI 和实际视觉效果仍须单独验收。
+目标环境：**Windows、Python 3.12 x64**。需安装可选依赖 `PySide6`（见 `requirements-ui.txt` 或 `pip install "daytrace[ui]"`）。缺依赖时 `daytrace.py ui` 会提示安装命令，可用 `--tk-diary` 临时退回 Tk 日记壳。
 
-## 视觉规范（2026-11-09 二版）
+## 视觉规范（Qt 日记壳 · 2026-11-09）
 
-设计 token 集中在 `diary_theme.py`：`BG #F6F7F9` 纸感底、卡片 `SURFACE #FFFFFF`、正文 `INK`、辅助 `MUTED/FAINT`、强调 `ACCENT #3B6FE8`、边框 `BORDER`。无玻璃拟态、大渐变或仪表盘数字。
+设计 token：`diary_theme.py`（与 Qt 共用）+ `diary_qt/theme.py`（全局 QSS）。纸感底 `#F6F7F9`、圆角 **10–12px** 按钮/输入框、hover/pressed 分层；强调色 `#3B6FE8`；无玻璃拟态与大渐变。
 
-- **壳层**：`DiarySidebar` Canvas 窄导航（168px），选中白底卡片 + 左侧蓝条；主区顶栏极简（页面标题、日期胶囊、筛选、待确认、记录状态与开始/暂停）。
-- **时间线**：`DiaryCanvas` 左轨时间（起止分两行）、右侧白卡片约 152px 行高；标题 12pt 加粗、描述单行辅助色、分类细边框胶囊、时长与状态弱化右对齐；待确认暖色细芯片可点进确认；缺口灰底不抢戏。
-- **设置**：五分区横向标签（非凸起 Notebook），各分区可滚动白卡片式表单，Ghost/Accent 按钮分层。
-- **字体**：Segoe UI（时间）+ Microsoft YaHei UI（中文正文）；HiDPI 启动时 `tk scaling` 1.0–2.0。
-- **详情/确认**：顶层窗统一 `BG`，字段与证据区减少表格密度。
+- **壳层**：Qt 窄侧栏导航（圆角选中态）；顶栏日期胶囊、筛选、待确认、记录状态。
+- **时间线**：`TimelineWidget` + `QPainter` 虚拟绘制；左轨起止时间、右卡白底圆角；待确认暖色芯片；缺口灰底。
+- **设置**：五分区横向标签 + `QStackedWidget` 滚动表单。
+- **字体**：Segoe UI + Microsoft YaHei UI（Qt 回退 sans-serif）。
+- **详情/确认**：`QDialog` 圆角控件，证据 `QTextEdit` 只读。
+
+Tk 日记壳（`--tk-diary`）仍保留 Canvas 实现，视觉略旧，仅供回退对比。
 
 ## 运行与回退
 
 项目目录 PowerShell：
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-ui.txt
 .\.venv\Scripts\python.exe .\daytrace.py ui
 ```
 
@@ -35,10 +38,13 @@
 
 示例使用临时数据库，标题明确标注“合成示例数据”，禁止开启采集或云端。可加 `--seconds 3` 自动关闭。示例不是用户监测数据或真实模型响应。
 
-旧 UI 回退入口：
+回退入口：
 
 ```powershell
+# 旧版表格/色块 UI
 .\.venv\Scripts\python.exe .\daytrace.py ui --legacy
+# Tk 日记壳（未装 PySide6 或对比用）
+.\.venv\Scripts\python.exe .\daytrace.py ui --tk-diary
 ```
 
 ## 页面与交互
@@ -91,7 +97,7 @@ AI 复盘只使用当前日期授权范围内最多 100 个已有活动名称、
 | 单片段内任意时间切割 | **未实现**（仅按原始片段边界纠正） |
 | 无覆盖时段手写补录 | **未实现** |
 | 自动扩展子分类目录 | **未实现** |
-| PySide6 / 原生侧滑详情 | **未做**（维持 Tk） |
+| PySide6 默认壳 | **已实现**（规则全屏编辑器暂简版，完整编辑用 `--tk-diary`） |
 | 高 DPI / 多屏 / 长列表性能 | 已加 Tk scaling 启发式；**须 Windows 人工验收** |
 | 视觉截图验收 | **未完成**（见下） |
 
