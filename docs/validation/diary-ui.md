@@ -33,6 +33,8 @@ Tk 日记壳（`--tk-diary`）仍保留 Canvas 实现，视觉略旧，仅供回
 
 **线程回归**：后台 `ThreadPoolExecutor` 完成回调必须通过 `JobBridge.finished`（`QObject` + `Signal`）回到 UI 线程处理 `busy` 与 `show()`；禁止在 worker `add_done_callback` 里直接 `QTimer.singleShot`，否则 `busy` 可能永不归零、时间线空白且所有操作提示「请等待」。
 
+**Schema**：新建数据库在 `Repository` 创建时直接应用个性化迁移（`user_version=3`），采集运行中 UI 可只读打开。遗留 v2 库若在采集中需升级，会提示「请先停止采集再打开日记」而非裸 `RuntimeError`。
+
 隔离示例预览：
 
 ```powershell

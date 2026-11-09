@@ -38,7 +38,7 @@ from ..diary_worker import review, tick
 from ...preferences import options, save_options
 from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
-from ..store import Memory
+from ..store import Memory, PersonalizationUpgradeBlocked
 from ..timeline_view import PALETTE
 from .capture_sync import read_capture_state, repo_root
 from .dialogs import ConfirmDialog, DetailDialog, FragmentDialog
@@ -408,6 +408,8 @@ class DiaryMainWindow(QMainWindow):
             value = future.result()
             if callback:
                 callback(value)
+        except PersonalizationUpgradeBlocked as error:
+            QMessageBox.warning(self, '需要先停止采集', str(error))
         except Exception:
             if not quiet:
                 QMessageBox.critical(self, '操作未完成', '请检查数据库状态；隐私操作前请停止采集。')

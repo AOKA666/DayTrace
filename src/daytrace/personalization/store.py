@@ -7,6 +7,16 @@ from ..storage.repository import Repository, InstanceLock, uid
 from .profile import clean_profile
 
 DAY = 86_400_000
+MIGRATION_003 = Path(__file__).parents[1] / 'storage/migrations/003_personalization.sql'
+
+
+class PersonalizationUpgradeBlocked(RuntimeError):
+    """v2 database needs 003 migration but collector holds the instance lock."""
+
+
+def personalization_schema_ready(db) -> bool:
+    row = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='personal_profile'").fetchone()
+    return row is not None
 
 
 class Memory:
@@ -15,15 +25,32 @@ class Memory:
         self.db = self.repo.db
         self.now = now or (lambda: time.time_ns() // 1_000_000)
         try:
-            if self.db.execute('PRAGMA user_version').fetchone()[0] == 2:
-                # Upgrade only while the existing collector is stopped.
-                with InstanceLock(Path(path)):
-                    self.db.executescript((Path(__file__).parents[1] / 'storage/migrations/003_personalization.sql').read_text('utf-8'))
+            self._upgrade_personalization_if_needed(Path(path))
             if cleanup:
                 self.repo.cleanup(self.now())
         except BaseException:
             self.db.rollback()
             self.repo.close()
+            raise
+
+    def _upgrade_personalization_if_needed(self, path: Path) -> None:
+        version = self.db.execute('PRAGMA user_version').fetchone()[0]
+        if version >= 3:
+            return
+        if version != 2:
+            return
+        if personalization_schema_ready(self.db):
+            with self.db:
+                self.db.execute('PRAGMA user_version=3')
+            return
+        try:
+            with InstanceLock(path):
+                self.db.executescript(MIGRATION_003.read_text('utf-8'))
+        except RuntimeError as error:
+            if 'Collector is running' in str(error):
+                raise PersonalizationUpgradeBlocked(
+                    '数据库需要升级到个性化版本才能打开日记。请先在采集终端停止记录（Ctrl+C 或 daytrace stop），再打开界面。'
+                ) from None
             raise
 
     def close(self):
