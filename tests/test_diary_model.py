@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 import unittest
 
-from daytrace.personalization.diary_model import cards, compact_cards, overview
+from daytrace.personalization.diary_model import cards, compact_cards, overview, project_dwell_threshold
 
 
 def _row(**overrides):
@@ -71,6 +71,13 @@ class DiaryModelTests(unittest.TestCase):
         self.assertEqual(items[0]['category'], '待确认')
         self.assertTrue(items[0]['review'])
         self.assertIn('前台窗口', items[0]['description'])
+
+    def test_project_dwell_hides_short_active_segments(self):
+        rows = [_row(start_ms=0, end_ms=3_000, title='弹窗', label='', task_id=None)]
+        projected = project_dwell_threshold(rows, 5_000)
+        self.assertEqual(projected[0]['state'], 'unknown')
+        items = cards(projected)
+        self.assertEqual(items[0]['title'], '未记录时间')
 
     def test_compact_merges_same_window_with_short_gap(self):
         rows = [

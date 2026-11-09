@@ -34,9 +34,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..classifier import Classifier
-from ..diary_model import DEFAULT_CATEGORIES, cards, compact_cards, overview
+from ..diary_model import DEFAULT_CATEGORIES, cards, compact_cards, overview, project_dwell_threshold
 from ..diary_worker import review, tick
-from ...preferences import diary_gap_ms, options, save_options
+from ...preferences import diary_display_ms, options, save_dwell, save_options, validate_dwell
 from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
 from ..store import Memory, PersonalizationUpgradeBlocked
@@ -377,7 +377,7 @@ class DiaryMainWindow(QMainWindow):
         self.dwell.setObjectName('settingsField')
         self.dwell.setMaximumWidth(88)
         privacy.addWidget(self.dwell)
-        t = QPushButton('保存阈值')
+        t = QPushButton('保存采集与日记显示')
         t.setObjectName('ghost')
         t.clicked.connect(self.save_capture_preferences)
         privacy.addWidget(t)
@@ -502,14 +502,15 @@ class DiaryMainWindow(QMainWindow):
         end = int((day + timedelta(days=1)).timestamp() * 1000)
 
         def read(memory):
-            rows = [dict(r, start_ms=max(start, r['start_ms']), end_ms=min(end, r['end_ms'])) for r in memory.timeline(start, end)]
-            merge_ms, fold_ms = diary_gap_ms(self.database)
+            raw = [dict(r, start_ms=max(start, r['start_ms']), end_ms=min(end, r['end_ms'])) for r in memory.timeline(start, end)]
+            dwell_ms, merge_ms, fold_ms = diary_display_ms(self.database)
+            rows = project_dwell_threshold(raw, dwell_ms)
             items = compact_cards(cards(rows), merge_ms, fold_ms)
-            return rows, items, memory.profile(), memory.tasks(), memory.rules(), options(self.database)
+            return raw, rows, items, memory.profile(), memory.tasks(), memory.rules(), options(self.database)
 
         def show(data):
-            rows, items, profile, self.tasks, self.rules, config = data
-            self.rows = {r['interval_id']: r for r in rows}
+            raw, rows, items, profile, self.tasks, self.rules, config = data
+            self.rows = {r['interval_id']: r for r in raw}
             activities = profile.get('activities') or list(DEFAULT_CATEGORIES)
             self.category_colors = bootstrap_category_colors(self.database, activities)
             self.all_cards = items
@@ -638,17 +639,28 @@ class DiaryMainWindow(QMainWindow):
         self.run_job(lambda m: m.save_profile(profile), lambda _: self.refresh())
 
     def save_capture_preferences(self):
-        from ...preferences import save_dwell
+        try:
+            dwell = validate_dwell(self.dwell.text())
+            merge = max(0, min(600, int(self.merge_gap.text().strip() or 180)))
+            fold = max(0, min(600, int(self.fold_gap.text().strip() or 120)))
+        except (TypeError, ValueError):
+            QMessageBox.critical(self, '采集与日记显示', '停留阈值须在 0–300 秒；合并/折叠间隔须为 0–600 的整数。')
+            return
 
         def work(_memory):
-            save_dwell(self.database, self.dwell.text())
+            save_dwell(self.database, dwell)
             save_options(
                 self.database,
-                diary_merge_gap_seconds=int(self.merge_gap.text().strip() or 180),
-                diary_fold_gap_seconds=int(self.fold_gap.text().strip() or 120),
+                min_dwell_seconds=dwell,
+                diary_merge_gap_seconds=merge,
+                diary_fold_gap_seconds=fold,
             )
 
-        self.run_job(work, lambda _: self.refresh())
+        def done(_):
+            self.refresh(load_profile=True)
+            QMessageBox.information(self, '已保存', '偏好已写入；当前日期时间线已按新阈值重新展示。\n下次启动采集时，停留阈值同时作用于采集器。')
+
+        self.run_job(work, done)
 
     def save_screenshots(self):
         self.run_job(lambda m: save_options(self.database, screenshots_enabled=self.capture_enabled.isChecked()))

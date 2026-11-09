@@ -175,6 +175,27 @@ def _merge_gap_cards(items):
     return merged
 
 
+def project_dwell_threshold(rows, dwell_ms):
+    """Recompute diary rows for the current dwell threshold without changing stored intervals."""
+    dwell_ms = max(0, int(dwell_ms))
+    projected = []
+    for row in rows:
+        item = dict(row)
+        span = item['end_ms'] - item['start_ms']
+        if item['state'] == 'active' and span < dwell_ms:
+            item.update(
+                state='unknown',
+                title=None,
+                label=None,
+                category='',
+                project='',
+                task_id=None,
+                short_gap=1,
+            )
+        projected.append(item)
+    return projected
+
+
 def compact_cards(items, merge_gap_ms=DEFAULT_MERGE_GAP_MS, fold_gap_ms=DEFAULT_FOLD_GAP_MS):
     """Presentation-only compaction: merge fragmented active cards and fold short gaps."""
     if not items:

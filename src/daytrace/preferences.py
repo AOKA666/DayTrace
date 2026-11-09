@@ -35,6 +35,13 @@ def screenshots_enabled(database):
     return options(database).get('screenshots_enabled') is True
 
 
+def diary_display_ms(database):
+    """Read dwell + diary compaction thresholds as milliseconds (presentation layer)."""
+    dwell_ms = int(round(dwell_seconds(database) * 1000))
+    merge_ms, fold_ms = diary_gap_ms(database)
+    return dwell_ms, merge_ms, fold_ms
+
+
 def diary_gap_ms(database):
     opts = options(database)
     try:
