@@ -38,6 +38,26 @@ class DiaryQtTests(unittest.TestCase):
         self.assertTrue(callable(save_dwell))
         self.assertTrue(callable(save_options))
 
+    def test_repo_root_resolves_to_repository(self):
+        from daytrace.personalization.diary_qt.capture_sync import repo_root
+
+        root = repo_root()
+        self.assertTrue((root / 'daytrace.py').is_file())
+        self.assertTrue((root / 'src' / 'daytrace').is_dir())
+
+    def test_read_capture_state_stopped_without_lock(self):
+        import tempfile
+        from unittest.mock import patch
+
+        from daytrace.personalization.diary_qt.capture_sync import read_capture_state
+        from daytrace.personalization.store import Memory
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'empty.sqlite3'
+            Memory(path).close()
+            with patch('daytrace.personalization.diary_worker.is_running', return_value=False):
+                self.assertEqual(read_capture_state(path), 'stopped')
+
     def test_diary_qt_no_wrong_parent_preferences_imports(self):
         """diary_qt lives one level deeper than personalization; preferences/cli sit under daytrace."""
         offenders = []

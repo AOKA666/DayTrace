@@ -40,6 +40,7 @@ from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
 from ..store import Memory
 from ..timeline_view import PALETTE
+from .capture_sync import read_capture_state, repo_root
 from .dialogs import ConfirmDialog, DetailDialog, FragmentDialog
 from .theme import ACCENT, BG, BORDER, MUTED, NAV_ITEMS, SURFACE
 from .timeline import TimelineWidget
@@ -216,12 +217,17 @@ class DiaryMainWindow(QMainWindow):
         self.timeline.card_confirm.connect(self.quick_confirm)
         self.timeline.card_hovered.connect(self.on_hover_id)
 
-        self._bg_timer = QTimer(self)
-        self._bg_timer.timeout.connect(self.background)
-        self._bg_timer.start(2000)
+        self._capture_timer = QTimer(self)
+        self._capture_timer.timeout.connect(self.sync_capture_state)
+        self._capture_timer.start(2000)
+        self._ai_timer = QTimer(self)
+        self._ai_timer.timeout.connect(self._run_ai_tick)
+        self._ai_timer.start(2000)
 
         if preview_mode:
             self.capture_button.setEnabled(False)
+        else:
+            QTimer.singleShot(0, self.sync_capture_state)
 
         self.refresh(load_profile=True)
         self.navigate('今日', refresh=False)
@@ -694,42 +700,102 @@ class DiaryMainWindow(QMainWindow):
         self.review_cache = None
         self.run_job(lambda m: Vault(self.endpoint.text().strip()).delete())
 
-    def toggle_capture(self):
+    def _update_capture_chrome(self, state: str) -> None:
+        self.recording = state
+        self.capture_state.setText({'running': '正在记录', 'paused': '已暂停', 'stopped': '未开始记录'}[state])
+        self.capture_button.setText({'running': '暂停', 'paused': '恢复', 'stopped': '开始记录'}[state])
+
+    def sync_capture_state(self) -> None:
+        if self.preview_mode or self.closed:
+            return
+
+        def apply(state: str) -> None:
+            self._update_capture_chrome(state)
+            if state != 'stopped' and self.collector_process and self.collector_process.poll() is not None:
+                self.collector_process = None
+
+        future = self.executor.submit(read_capture_state, self.database)
+
+        def done(fut) -> None:
+            try:
+                state = fut.result()
+            except Exception:
+                return
+            QTimer.singleShot(0, lambda s=state: apply(s))
+
+        future.add_done_callback(done)
+
+    def _sync_capture_state_blocking(self) -> str:
+        state = read_capture_state(self.database)
+        self._update_capture_chrome(state)
+        return state
+
+    def toggle_capture(self) -> None:
         if self.preview_mode:
             return
         self.review_cache = None
-        if self.recording == 'stopped':
-            if QMessageBox.question(self, '开始记录', '记录前台应用、窗口标题和可读正文。现在开始？') != QMessageBox.StandardButton.Yes:
+        state = self._sync_capture_state_blocking()
+        if state == 'running':
+            command = 'pause'
+        elif state == 'paused':
+            command = 'resume'
+        else:
+            if QMessageBox.question(
+                self, '开始记录', '记录前台应用、窗口标题和可读正文。现在开始？'
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            state = self._sync_capture_state_blocking()
+            if state != 'stopped':
+                QMessageBox.information(
+                    self,
+                    '已在记录',
+                    '检测到该数据库已有采集进程在运行（例如在终端中 daytrace.py start）。\n'
+                    '界面已同步为当前状态，不会启动第二个实例。',
+                )
                 return
             import subprocess
 
-            source_root = Path(__file__).resolve().parents[3]
-            entry = [str(source_root / 'daytrace.py')] if (source_root / 'daytrace.py').is_file() else ['-m', 'daytrace']
-            launch = dict(cwd=str(source_root))
+            source_root = repo_root()
+            script = source_root / 'daytrace.py'
+            entry = [str(script)] if script.is_file() else ['-m', 'daytrace']
+            launch = dict(cwd=str(source_root), stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             if sys.platform == 'win32':
                 launch['creationflags'] = subprocess.CREATE_NO_WINDOW
             self.collector_process = subprocess.Popen(
                 [sys.executable, *entry, '--db', str(self.database), 'start', '--content'],
                 **launch,
             )
-        else:
-            from ...cli import control
+            time.sleep(0.35)
+            code = self.collector_process.poll()
+            if code is not None:
+                err = (self.collector_process.stderr.read() if self.collector_process.stderr else '') or ''
+                out = (self.collector_process.stdout.read() if self.collector_process.stdout else '') or ''
+                detail = (err + out).strip()[:600] or f'进程已退出，代码 {code}'
+                QMessageBox.critical(
+                    self,
+                    '无法启动采集',
+                    '采集未启动，常见原因是该数据库已被另一个 start 占用。\n\n' + detail,
+                )
+                self.collector_process = None
+            self._sync_capture_state_blocking()
+            return
 
-            command = 'resume' if self.recording == 'paused' else 'pause'
-            self.run_job(lambda m: control(self.database, command))
+        from ...cli import control
+
+        def work(_memory):
+            control(self.database, command)
+
+        self.run_job(work, lambda _: self._sync_capture_state_blocking())
 
     def on_hover_id(self, interval_id):
         self.hover_id = interval_id
 
-    def background(self):
-        if self.closed:
+    def _run_ai_tick(self) -> None:
+        if self.closed or self.preview_mode:
             return
         if self.ai_future and self.ai_future.done():
             try:
                 result = self.ai_future.result()
-                self.recording = result['state']
-                self.capture_state.setText({'running': '正在记录', 'paused': '已暂停', 'stopped': '未开始记录'}[self.recording])
-                self.capture_button.setText({'running': '暂停', 'paused': '恢复', 'stopped': '开始记录'}[self.recording])
                 if result.get('note'):
                     self.ai_note.setText(result['note'])
                 if result.get('cooldown'):
@@ -738,6 +804,14 @@ class DiaryMainWindow(QMainWindow):
                     self.review_cache = result['review']
                     if not self.busy:
                         self.refresh(quiet=True)
+                if not hasattr(self, 'loaded_preferences') and result.get('options'):
+                    config = result['options']
+                    self.loaded_preferences = True
+                    self.auto_ai.setChecked(config.get('auto_ai') is True)
+                    if config.get('ai_endpoint'):
+                        self.endpoint.setText(config['ai_endpoint'])
+                    if config.get('ai_model'):
+                        self.model.setText(config['ai_model'])
             except Exception:
                 self.ai_note.setText('后台整理暂不可用，原始记录已保留。')
             self.ai_future = None
@@ -765,6 +839,8 @@ class DiaryMainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.closed = True
+        self._capture_timer.stop()
+        self._ai_timer.stop()
         if self.collector_process and self.collector_process.poll() is None:
             from ...cli import control
 
