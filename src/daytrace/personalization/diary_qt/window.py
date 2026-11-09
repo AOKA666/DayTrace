@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 from ..classifier import Classifier
 from ..diary_model import DEFAULT_CATEGORIES, cards, overview
 from ..diary_worker import review, tick
-from ..preferences import options, save_options
+from ...preferences import options, save_options
 from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
 from ..store import Memory
@@ -537,7 +537,7 @@ class DiaryMainWindow(QMainWindow):
         self.run_job(lambda m: m.save_profile(profile), lambda _: self.refresh())
 
     def save_capture_preferences(self):
-        from ..preferences import save_dwell
+        from ...preferences import save_dwell
 
         self.run_job(lambda m: save_dwell(self.database, self.dwell.text()))
 
@@ -713,7 +713,7 @@ class DiaryMainWindow(QMainWindow):
                 **launch,
             )
         else:
-            from ..cli import control
+            from ...cli import control
 
             command = 'resume' if self.recording == 'paused' else 'pause'
             self.run_job(lambda m: control(self.database, command))
@@ -766,7 +766,7 @@ class DiaryMainWindow(QMainWindow):
     def closeEvent(self, event):
         self.closed = True
         if self.collector_process and self.collector_process.poll() is None:
-            from ..cli import control
+            from ...cli import control
 
             try:
                 control(self.database, 'stop')

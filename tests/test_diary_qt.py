@@ -1,9 +1,12 @@
+import ast
 import sys
 import unittest
 from importlib.util import find_spec
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+
+DIARY_QT = Path(__file__).resolve().parents[1] / 'src' / 'daytrace' / 'personalization' / 'diary_qt'
 
 
 class DiaryQtTests(unittest.TestCase):
@@ -24,6 +27,28 @@ class DiaryQtTests(unittest.TestCase):
         from daytrace.personalization.diary_qt import INSTALL_HINT
 
         self.assertIn('PySide6', INSTALL_HINT)
+
+    def test_preferences_resolves_to_daytrace_root(self):
+        import daytrace.preferences as preferences
+
+        self.assertTrue(str(preferences.__file__).endswith('preferences.py'))
+        from daytrace.preferences import options, save_dwell, save_options
+
+        self.assertTrue(callable(options))
+        self.assertTrue(callable(save_dwell))
+        self.assertTrue(callable(save_options))
+
+    def test_diary_qt_no_wrong_parent_preferences_imports(self):
+        """diary_qt lives one level deeper than personalization; preferences/cli sit under daytrace."""
+        offenders = []
+        for path in DIARY_QT.glob('*.py'):
+            tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                if node.module in ('preferences', 'cli') and node.level == 2:
+                    offenders.append(f'{path.name}:{node.lineno}')
+        self.assertEqual(offenders, [], f'bad relative imports: {offenders}')
 
 
 if __name__ == '__main__':
