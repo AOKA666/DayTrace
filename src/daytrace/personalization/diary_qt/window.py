@@ -256,48 +256,81 @@ class DiaryMainWindow(QMainWindow):
         self.refresh(load_profile=True)
         self.navigate('今日', refresh=False)
 
+    def _settings_panel(self, page_key: str, title: str) -> QVBoxLayout:
+        page = self.settings_pages[page_key]
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(0)
+        panel = QFrame()
+        panel.setObjectName('settingsPanel')
+        panel.setMaximumWidth(500)
+        inner = QVBoxLayout(panel)
+        inner.setContentsMargins(20, 18, 20, 20)
+        inner.setSpacing(8)
+        heading = QLabel(title)
+        heading.setObjectName('sectionTitle')
+        inner.addWidget(heading)
+        page.addWidget(panel, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        page.addStretch(1)
+        return inner
+
+    def _settings_field(self, parent: QVBoxLayout, label: str) -> QLineEdit:
+        cap = QLabel(label)
+        cap.setObjectName('fieldLabel')
+        parent.addWidget(cap)
+        entry = QLineEdit()
+        entry.setObjectName('settingsField')
+        parent.addWidget(entry)
+        return entry
+
     def _build_settings(self):
-        daily = self.settings_pages['我的日常']
-        daily.addWidget(QLabel('让 DayTrace 更了解你'))
+        daily = self._settings_panel('我的日常', '个人档案')
+        hint = QLabel('用几句话描述日常，帮助识别活动。字段不必一次填完。')
+        hint.setObjectName('caption')
+        hint.setWordWrap(True)
+        daily.addWidget(hint)
         self.description = QTextEdit()
-        self.description.setMaximumHeight(120)
+        self.description.setObjectName('settingsArea')
+        self.description.setMaximumHeight(96)
         daily.addWidget(self.description)
+        btn_row = QHBoxLayout()
         propose = QPushButton('生成日常建议')
         propose.setObjectName('ghost')
         propose.clicked.connect(self.propose)
-        daily.addWidget(propose)
+        btn_row.addWidget(propose)
+        btn_row.addStretch()
+        daily.addLayout(btn_row)
         self.fields: dict[str, QLineEdit] = {}
         for key, label in [
             ('activities', '活动分类（逗号分隔）'),
             ('hours', '常用时间（可选）'),
             ('workflow', '活动说明（可选）'),
         ]:
-            daily.addWidget(QLabel(label))
-            entry = QLineEdit()
-            daily.addWidget(entry)
-            self.fields[key] = entry
+            self.fields[key] = self._settings_field(daily, label)
+        actions = QHBoxLayout()
         save_d = QPushButton('保存个人档案')
         save_d.setObjectName('accent')
         save_d.clicked.connect(self.save_profile)
-        daily.addWidget(save_d)
         colors = QPushButton('分类颜色')
         colors.setObjectName('ghost')
         colors.clicked.connect(self.category_dialog)
-        daily.addWidget(colors)
+        actions.addWidget(save_d)
+        actions.addWidget(colors)
+        actions.addStretch()
+        daily.addLayout(actions)
 
-        projects = self.settings_pages['当前项目']
+        projects = self._settings_panel('当前项目', '项目与环境')
         for key, label in [('projects', '项目名称（逗号分隔）'), ('software', '常用软件'), ('websites', '常用网站')]:
-            projects.addWidget(QLabel(label))
-            entry = QLineEdit()
-            projects.addWidget(entry)
-            self.fields[key] = entry
+            self.fields[key] = self._settings_field(projects, label)
         save_p = QPushButton('保存个人档案')
         save_p.setObjectName('accent')
         save_p.clicked.connect(self.save_profile)
-        projects.addWidget(save_p)
+        projects.addWidget(save_p, 0, Qt.AlignmentFlag.AlignLeft)
 
-        learning = self.settings_pages['识别与学习']
-        learning.addWidget(QLabel('AI 自动整理'))
+        learning = self._settings_panel('识别与学习', 'AI 与记忆')
+        sub = QLabel('默认不联网；开启后在本窗口内分批整理新活动。')
+        sub.setObjectName('caption')
+        sub.setWordWrap(True)
+        learning.addWidget(sub)
         self.auto_ai = QCheckBox('允许后台 AI 分析新活动')
         self.auto_ai.toggled.connect(self.toggle_ai)
         learning.addWidget(self.auto_ai)
@@ -305,6 +338,7 @@ class DiaryMainWindow(QMainWindow):
         self.ai_note.setObjectName('caption')
         self.ai_note.setWordWrap(True)
         learning.addWidget(self.ai_note)
+        learning.addSpacing(6)
         for text, slot in [
             ('重试待识别活动', self.retry_ai),
             ('管理学习规则', self.rule_dialog),
@@ -316,34 +350,34 @@ class DiaryMainWindow(QMainWindow):
             btn = QPushButton(text)
             btn.setObjectName('ghost')
             btn.clicked.connect(slot)
-            learning.addWidget(btn)
+            learning.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
 
-        privacy = self.settings_pages['采集与隐私']
+        privacy = self._settings_panel('采集与隐私', '采集与截图')
+        note = QLabel('停留阈值在下次启动采集时生效；截图遵循排除与 7 天本地保留。')
+        note.setObjectName('caption')
+        note.setWordWrap(True)
+        privacy.addWidget(note)
         privacy.addWidget(QLabel('短暂停留阈值（秒）'))
         self.dwell = QLineEdit('5')
-        self.dwell.setFixedWidth(80)
+        self.dwell.setObjectName('settingsField')
+        self.dwell.setMaximumWidth(88)
         privacy.addWidget(self.dwell)
         t = QPushButton('保存阈值')
         t.setObjectName('ghost')
         t.clicked.connect(self.save_capture_preferences)
-        privacy.addWidget(t)
+        privacy.addWidget(t, 0, Qt.AlignmentFlag.AlignLeft)
         self.capture_enabled = QCheckBox('开启本地截图证据')
         self.capture_enabled.toggled.connect(self.save_screenshots)
         privacy.addWidget(self.capture_enabled)
-        privacy.addWidget(
-            QLabel(
-                '仅前台窗口，排除规则优先。截图目录最多 7 天，不上传。\n'
-                '默认不采集、不截图、不发送云端。'
-            )
-        )
 
-        advanced = self.settings_pages['模型与高级']
-        advanced.addWidget(QLabel('服务地址'))
-        self.endpoint = QLineEdit(DEEPSEEK_ENDPOINT)
-        advanced.addWidget(self.endpoint)
-        advanced.addWidget(QLabel('模型名称'))
-        self.model = QLineEdit(DEEPSEEK_MODEL)
-        advanced.addWidget(self.model)
+        advanced = self._settings_panel('模型与高级', '模型连接')
+        adv = QLabel('密钥仅存于 Windows Credential Manager。')
+        adv.setObjectName('caption')
+        advanced.addWidget(adv)
+        self.endpoint = self._settings_field(advanced, '服务地址')
+        self.endpoint.setText(DEEPSEEK_ENDPOINT)
+        self.model = self._settings_field(advanced, '模型名称')
+        self.model.setText(DEEPSEEK_MODEL)
         for text, slot in [
             ('保存模型配置', self.save_model),
             ('设置密钥', self.set_key),
@@ -352,7 +386,7 @@ class DiaryMainWindow(QMainWindow):
             b = QPushButton(text)
             b.setObjectName('ghost')
             b.clicked.connect(slot)
-            advanced.addWidget(b)
+            advanced.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
 
     def _style_nav(self):
         for name, btn in self.nav_buttons.items():
