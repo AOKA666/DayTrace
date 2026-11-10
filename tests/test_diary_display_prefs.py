@@ -23,6 +23,23 @@ class DiaryDisplayPrefsTests(unittest.TestCase):
             prefs = json.loads(Path(str(db) + '.preferences.json').read_text('utf-8'))
             self.assertEqual(prefs['min_dwell_seconds'], 8)
 
+    def test_colors_only_update_preserves_other_keys(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = Path(folder) / 'demo.sqlite3'
+            db.write_text('', encoding='utf-8')
+            save_options(
+                db,
+                min_dwell_seconds=12,
+                show_short_dwells=True,
+                screenshots_enabled=True,
+            )
+            save_options(db, category_colors={'工作': '#5B8FCB'})
+            prefs = json.loads(Path(str(db) + '.preferences.json').read_text('utf-8'))
+            self.assertEqual(prefs['min_dwell_seconds'], 12)
+            self.assertTrue(prefs['show_short_dwells'])
+            self.assertTrue(prefs['screenshots_enabled'])
+            self.assertEqual(prefs['category_colors'], {'工作': '#5B8FCB'})
+
 
 if __name__ == '__main__':
     unittest.main()

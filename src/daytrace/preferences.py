@@ -1,6 +1,8 @@
 """Non-sensitive, per-database capture preferences. Never stores credentials."""
 import json
 import math
+import os
+import secrets
 from pathlib import Path
 
 
@@ -23,12 +25,25 @@ def save_dwell(database, seconds):
     save_options(database, min_dwell_seconds=validate_dwell(seconds))
 
 
-def options(database):
+def _preferences_path(database):
+    return Path(str(database) + '.preferences.json')
+
+
+def _read_options_dict(path):
     try:
-        value=json.loads(Path(str(database)+'.preferences.json').read_text('utf-8'))
-        return value if isinstance(value,dict) else {}
-    except (OSError,ValueError):
+        if not path.is_file():
+            return {}
+        text = path.read_text('utf-8')
+        if not text.strip():
+            return {}
+        value = json.loads(text)
+        return dict(value) if isinstance(value, dict) else {}
+    except (OSError, ValueError, TypeError):
         return {}
+
+
+def options(database):
+    return _read_options_dict(_preferences_path(database))
 
 
 def screenshots_enabled(database):
@@ -62,13 +77,26 @@ def diary_gap_ms(database):
 
 
 def save_options(database, **changes):
-    path = Path(str(database) + '.preferences.json')
+    path = _preferences_path(database)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix('.tmp')
-    try:
-        value=options(database)
+    for attempt in range(2):
+        value = _read_options_dict(path)
+        if attempt == 0 and not value and path.is_file():
+            try:
+                if path.stat().st_size > 2:
+                    value = _read_options_dict(path)
+            except OSError:
+                pass
         value.update(changes)
-        temporary.write_text(json.dumps(value), encoding='utf-8')
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
+        temporary = path.with_name(
+            f'{path.name}.tmp.{os.getpid()}.{secrets.token_hex(4)}'
+        )
+        try:
+            temporary.write_text(
+                json.dumps(value, ensure_ascii=False),
+                encoding='utf-8',
+            )
+            temporary.replace(path)
+            return
+        finally:
+            temporary.unlink(missing_ok=True)

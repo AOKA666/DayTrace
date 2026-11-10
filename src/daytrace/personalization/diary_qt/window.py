@@ -544,11 +544,14 @@ class DiaryMainWindow(QMainWindow):
                 self.dwell.setText(str(config.get('min_dwell_seconds', 5)))
                 self.merge_gap.setText(str(config.get('diary_merge_gap_seconds', 180)))
                 self.fold_gap.setText(str(config.get('diary_fold_gap_seconds', 120)))
-                self.show_short_dwells.blockSignals(True)
-                self.show_short_dwells.setChecked(config.get('show_short_dwells') is True)
-                self.show_short_dwells.blockSignals(False)
-                self.capture_enabled.setChecked(config.get('screenshots_enabled') is True)
-                self.auto_ai.setChecked(config.get('auto_ai') is True)
+                for widget, key in (
+                    (self.show_short_dwells, 'show_short_dwells'),
+                    (self.capture_enabled, 'screenshots_enabled'),
+                    (self.auto_ai, 'auto_ai'),
+                ):
+                    widget.blockSignals(True)
+                    widget.setChecked(config.get(key) is True)
+                    widget.blockSignals(False)
                 if config.get('ai_endpoint'):
                     self.endpoint.setText(config['ai_endpoint'])
                 if config.get('ai_model'):
@@ -650,15 +653,8 @@ class DiaryMainWindow(QMainWindow):
         self.run_job(lambda m: m.save_profile(profile), lambda _: self.refresh())
 
     def _save_show_short_dwells(self, enabled):
-        if self.busy:
-            self.show_short_dwells.blockSignals(True)
-            self.show_short_dwells.setChecked(not enabled)
-            self.show_short_dwells.blockSignals(False)
-            return
-        self.run_job(
-            lambda _m: save_options(self.database, show_short_dwells=enabled),
-            lambda _: self.refresh(),
-        )
+        save_options(self.database, show_short_dwells=enabled)
+        self.refresh(quiet=True)
 
     def save_capture_preferences(self):
         try:
@@ -669,23 +665,22 @@ class DiaryMainWindow(QMainWindow):
             QMessageBox.critical(self, '采集与日记显示', '停留阈值须在 0–300 秒；合并/折叠间隔须为 0–600 的整数。')
             return
 
-        def work(_memory):
-            save_dwell(self.database, dwell)
-            save_options(
-                self.database,
-                min_dwell_seconds=dwell,
-                diary_merge_gap_seconds=merge,
-                diary_fold_gap_seconds=fold,
-            )
-
-        def done(_):
-            self.refresh(load_profile=True)
-            QMessageBox.information(self, '已保存', '偏好已写入；当前日期时间线已按新阈值重新展示。\n下次启动采集时，停留阈值同时作用于采集器。')
-
-        self.run_job(work, done)
+        save_dwell(self.database, dwell)
+        save_options(
+            self.database,
+            min_dwell_seconds=dwell,
+            diary_merge_gap_seconds=merge,
+            diary_fold_gap_seconds=fold,
+        )
+        self.refresh(load_profile=True)
+        QMessageBox.information(
+            self,
+            '已保存',
+            '偏好已写入；当前日期时间线已按新阈值重新展示。\n下次启动采集时，停留阈值同时作用于采集器。',
+        )
 
     def save_screenshots(self):
-        self.run_job(lambda m: save_options(self.database, screenshots_enabled=self.capture_enabled.isChecked()))
+        save_options(self.database, screenshots_enabled=self.capture_enabled.isChecked())
 
     def save_model(self):
         endpoint, model = self.endpoint.text().strip(), self.model.text().strip()
@@ -694,18 +689,17 @@ class DiaryMainWindow(QMainWindow):
         except Exception:
             QMessageBox.critical(self, '模型配置', '请输入有效的 HTTPS 地址和模型名称。')
             return
+        self.auto_ai.blockSignals(True)
         self.auto_ai.setChecked(False)
-        self.run_job(
-            lambda m: save_options(self.database, ai_endpoint=endpoint, ai_model=model, auto_ai=False),
-            lambda _: self.ai_note.setText('模型配置已保存，请重新开启后台分析。'),
-        )
+        self.auto_ai.blockSignals(False)
+        save_options(self.database, ai_endpoint=endpoint, ai_model=model, auto_ai=False)
+        self.ai_note.setText('模型配置已保存，请重新开启后台分析。')
 
     def toggle_ai(self, enabled):
         if self.preview_mode:
+            self.auto_ai.blockSignals(True)
             self.auto_ai.setChecked(False)
-            return
-        if self.busy:
-            self.auto_ai.setChecked(not enabled)
+            self.auto_ai.blockSignals(False)
             return
         if enabled and QMessageBox.question(
             self,
@@ -713,19 +707,19 @@ class DiaryMainWindow(QMainWindow):
             f'发送到：{self.endpoint.text().strip()}\n模型：{self.model.text().strip()}\n'
             '将发送开启后产生的活动标题与脱敏正文；不发送截图。\n是否开启？',
         ) != QMessageBox.StandardButton.Yes:
+            self.auto_ai.blockSignals(True)
             self.auto_ai.setChecked(False)
+            self.auto_ai.blockSignals(False)
             return
         since = time.time_ns() // 1_000_000
-        self.run_job(
-            lambda m: save_options(
-                self.database,
-                auto_ai=enabled,
-                ai_since_ms=since,
-                ai_endpoint=self.endpoint.text().strip(),
-                ai_model=self.model.text().strip(),
-            ),
-            lambda _: self.ai_note.setText('已开启 · 后台批量整理新活动' if enabled else '已关闭 · 无云端发送'),
+        save_options(
+            self.database,
+            auto_ai=enabled,
+            ai_since_ms=since,
+            ai_endpoint=self.endpoint.text().strip(),
+            ai_model=self.model.text().strip(),
         )
+        self.ai_note.setText('已开启 · 后台批量整理新活动' if enabled else '已关闭 · 无云端发送')
         self.next_ai = 0
         self.review_cache = None
 
