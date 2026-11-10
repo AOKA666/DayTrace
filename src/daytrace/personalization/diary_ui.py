@@ -40,14 +40,13 @@ def window_scaling(root):
 
 class DiaryApp(App):
     def __init__(self, root, database):
-        self.page = '今日'
+        self.page = '时间线'
         self.only_review = False
         self.all_cards = []
         self.recording = 'stopped'
         self.ai_future = None
         self.next_ai = 0
         self.ai_cancel = None
-        self.review_cache = None
         self.collector_process = None
         super().__init__(root, database)
         root.title('DayTrace · AI 时间日记')
@@ -104,7 +103,7 @@ class DiaryApp(App):
 
         self.ai_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='daytrace-diary-ai')
         root.after(1500, self.background)
-        self.navigate('今日', refresh=False)
+        self.navigate('时间线', refresh=False)
 
     def _style_window(self, win, title=None):
         win.configure(bg=BG)
@@ -253,6 +252,8 @@ class DiaryApp(App):
         self.date.pack(side='left', padx=6, pady=6)
         self.date.bind('<Return>', lambda _: self.refresh())
         ttk.Button(date_box, text='›', width=2, style='Ghost.TButton', command=lambda: self.shift_day(1)).pack(side='left', padx=(0, 4))
+        self.today_button = ttk.Button(bar, text='回到今天', style='Ghost.TButton', command=self.go_today)
+        self.date.bind('<KeyRelease>', lambda _: self._sync_date_controls())
 
         tools = tk.Frame(bar, bg=BG)
         tools.pack(side='right')
@@ -304,12 +305,8 @@ class DiaryApp(App):
         self.only_review = False
         self.sidebar.set_active(page)
         self.tabs.select(self.profile_tab if page == '设置' else self.timeline_tab)
-        self.heading.set({'今日': '今天', '历史记录': '历史', 'AI 复盘': '复盘'}.get(page, '今天'))
-        if page == '今日':
-            self.date.delete(0, 'end')
-            self.date.insert(0, datetime.now().strftime('%Y-%m-%d'))
-        if page == 'AI 复盘' and not self.summary_label.winfo_manager():
-            self.summary_label.pack(anchor='w', pady=(8, 0))
+        self.heading.set(page)
+        self._sync_date_controls()
         if refresh:
             self.refresh()
 
@@ -320,6 +317,19 @@ class DiaryApp(App):
             return
         self.date.delete(0, 'end')
         self.date.insert(0, day.strftime('%Y-%m-%d'))
+        self._sync_date_controls()
+        self.refresh()
+
+    def _sync_date_controls(self):
+        if self.date.get() != datetime.now().strftime('%Y-%m-%d'):
+            self.today_button.pack(side='left', padx=8)
+        else:
+            self.today_button.pack_forget()
+
+    def go_today(self):
+        self.date.delete(0, 'end')
+        self.date.insert(0, datetime.now().strftime('%Y-%m-%d'))
+        self._sync_date_controls()
         self.refresh()
 
     def collapse_summary(self):
@@ -362,24 +372,6 @@ class DiaryApp(App):
             self.category_colors = config.get('category_colors', {})
             self.all_cards = items
             self.summary.set(overview(items))
-            if self.review_cache:
-                current = {
-                    r['interval_id']: (
-                        r['label'],
-                        r['category'],
-                        r['project'],
-                        (r['end_ms'] - r['start_ms']) // 1000,
-                        r['reliability'],
-                        r['revision'],
-                    )
-                    for r in rows
-                    if r['state'] == 'active'
-                }
-                valid = all(current.get(identifier) == value for identifier, value in self.review_cache['facts'].items())
-                if valid:
-                    self.summary.set('AI 复盘 · 已授权活动（最多 100 段）\n' + self.review_cache['text'])
-                else:
-                    self.review_cache = None
             self.pending.set(f"待确认 {sum(c['review'] for c in items)}")
             self.filter_cards()
             if load_profile:
@@ -601,7 +593,6 @@ class DiaryApp(App):
         super().cancel_cloud()
         if self.ai_cancel:
             self.ai_cancel.set()
-        self.review_cache = None
 
     def background(self):
         if self.closed:
@@ -618,10 +609,6 @@ class DiaryApp(App):
                     self.ai_note.set(result['note'])
                 if result.get('cooldown'):
                     self.next_ai = time.monotonic() + result['cooldown']
-                if result.get('review') and result['review'].get('text'):
-                    self.review_cache = result['review']
-                    if not self.busy:
-                        self.refresh(quiet=True)
                 if not hasattr(self, 'loaded_preferences'):
                     config = result['options']
                     self.loaded_preferences = True
@@ -634,26 +621,17 @@ class DiaryApp(App):
                 self.ai_note.set('后台整理暂不可用，原始记录已保留。')
             self.ai_future = None
         if self.ai_future is None and not self.busy:
-            from .diary_worker import tick, review
+            from .diary_worker import tick
             import threading
 
             self.ai_cancel = threading.Event()
             analyze = time.monotonic() >= self.next_ai
             if analyze:
                 self.next_ai = time.monotonic() + 60
-            try:
-                day = datetime.strptime(self.date.get(), '%Y-%m-%d')
-            except ValueError:
-                day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            start = int(day.timestamp() * 1000)
-            end = int((day + timedelta(days=1)).timestamp() * 1000)
-            previous = self.review_cache['key'] if self.review_cache else None
             cancel = self.ai_cancel
 
             def work():
                 result = tick(self.database, cancel, analyze)
-                if analyze and not result.get('cooldown'):
-                    result['review'] = review(self.database, cancel, start, end, previous)
                 return result
 
             self.ai_future = self.ai_executor.submit(work)

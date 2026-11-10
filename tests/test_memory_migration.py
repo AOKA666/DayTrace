@@ -45,10 +45,11 @@ class MemoryMigrationTests(unittest.TestCase):
             db.executescript((migrations / '001_activity.sql').read_text('utf-8'))
             db.executescript((migrations / '002_content.sql').read_text('utf-8'))
             db.close()
-            self.assertEqual(
-                sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0],
-                2,
-            )
+            check = sqlite3.connect(path)
+            try:
+                self.assertEqual(check.execute('PRAGMA user_version').fetchone()[0], 2)
+            finally:
+                check.close()
             lock = InstanceLock(path)
             lock.__enter__()
             try:

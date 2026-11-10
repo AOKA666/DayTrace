@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal, QSize, QDate
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -31,42 +31,54 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QTabWidget,
+    QToolButton,
+    QCalendarWidget,
+    QMenu,
+    QWidgetAction,
 )
 
 from ..classifier import Classifier
 from ..diary_model import DEFAULT_CATEGORIES, build_display_cards, cards, overview
-from ..diary_worker import review, tick
+from ..diary_worker import tick
 from ...preferences import diary_display_ms, options, save_dwell, save_options, show_short_dwells, validate_dwell
 from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
 from ..store import Memory, PersonalizationUpgradeBlocked
 from ..category_palette import PALETTE, bootstrap_category_colors
 from .capture_sync import read_capture_state, repo_root
-from .categories import CategoriesPanel
+from .taxonomy_widgets import MyPanel
 from .dialogs import ConfirmDialog, DetailDialog, FragmentDialog
 from .jobs import CaptureBridge, JobBridge
 from .theme import ACCENT, BG, BORDER, MUTED, NAV_ITEMS, SURFACE
 from .timeline import TimelineWidget
+from .icons import icon
+from .primitives import ElidedLabel, concise_overview
+from .theme import SIDEBAR_WIDTH, PAGE_MARGIN, INK
 
 
 class DiaryMainWindow(QMainWindow):
+    taxonomy_changed = Signal(object)
+
     def __init__(self, database: Path, preview_mode=False):
         super().__init__()
         self.database = database
         self.preview_mode = preview_mode
-        self.page = '今日'
+        self.page = '时间线'
+        self._calendar_day = datetime.now().strftime('%Y-%m-%d')
         self.only_review = False
         self.all_cards: list = []
         self.rows: dict = {}
         self.tasks: list = []
         self.rules: list = []
         self.category_colors: dict = {}
+        self.taxonomy = {'categories': [], 'tags': []}
         self.busy = False
+        self._job_queue = []
         self.closed = False
         self.recording = 'stopped'
         self.ai_future = None
         self.ai_cancel = None
-        self.review_cache = None
         self.next_ai = 0
         self.collector_process = None
         self.hover_id = ''
@@ -82,83 +94,129 @@ class DiaryMainWindow(QMainWindow):
 
         self.setWindowTitle('DayTrace · AI 时间日记' + (' · 合成示例' if preview_mode else ''))
         self.setMinimumSize(1080, 680)
-        self.resize(1320, 820)
+        self.resize(1440, 900)
 
         root = QWidget()
+        root.setObjectName('mainSurface')
         self.setCentralWidget(root)
         outer = QHBoxLayout(root)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         side = QFrame()
-        side.setFixedWidth(168)
-        side.setStyleSheet(f'background:{BG}; border-right:1px solid {BORDER};')
+        side.setFixedWidth(SIDEBAR_WIDTH)
+        side.setObjectName('sidebar')
         side_col = QVBoxLayout(side)
-        side_col.setContentsMargins(12, 18, 12, 18)
-        side_col.setSpacing(6)
+        side_col.setContentsMargins(16, 28, 16, 28)
+        side_col.setSpacing(8)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(14)
+        logo = QLabel()
+        logo.setObjectName('brandLogo')
+        logo.setFixedSize(44, 44)
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setPixmap(icon('leaf', '#FFFFFF', 28).pixmap(28, 28))
+        brand_row.addWidget(logo)
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(2)
         brand = QLabel('DayTrace')
-        brand.setFont(QFont('Segoe UI', 13, QFont.Weight.Bold))
-        side_col.addWidget(brand)
-        sub = QLabel('时间日记')
-        sub.setObjectName('caption')
-        side_col.addWidget(sub)
-        side_col.addSpacing(18)
+        brand.setObjectName('brand')
+        brand_text.addWidget(brand)
+        sub = QLabel('AI 时间日记')
+        sub.setObjectName('brandSubtitle')
+        brand_text.addWidget(sub)
+        brand_row.addLayout(brand_text)
+        brand_row.addStretch()
+        side_col.addLayout(brand_row)
+        side_col.addSpacing(34)
         self.nav_buttons: dict[str, QPushButton] = {}
         for name, symbol in NAV_ITEMS:
-            btn = QPushButton(f'  {symbol}   {name}')
+            btn = QPushButton('   ' + name)
+            btn.setIcon(icon(symbol, '#34343B'))
+            btn.setIconSize(QSize(20, 20))
+            btn.setMinimumHeight(44)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked=False, n=name: self.navigate(n))
             side_col.addWidget(btn)
             self.nav_buttons[name] = btn
         side_col.addStretch()
-        side_col.addWidget(QLabel('本地保存\n随时纠正'))
+        local = QLabel('<span style="color:#16A34A">●</span>  本地保存')
+        side_col.addWidget(local)
+        footer = QLabel('随时纠正')
+        footer.setObjectName('caption')
+        side_col.addWidget(footer)
         outer.addWidget(side)
 
         main = QVBoxLayout()
-        main.setContentsMargins(22, 16, 22, 18)
-        main.setSpacing(10)
+        main.setContentsMargins(PAGE_MARGIN, 26, PAGE_MARGIN, 22)
+        main.setSpacing(20)
         main_col = QWidget()
         main_col.setLayout(main)
         outer.addWidget(main_col, stretch=1)
 
         top = QHBoxLayout()
+        top.setSpacing(16)
         self.heading = QLabel('今天')
         self.heading.setObjectName('title')
         top.addWidget(self.heading)
         top.addStretch()
         self.capture_state = QLabel('未开始记录')
-        self.capture_state.setObjectName('caption')
-        top.addWidget(self.capture_state)
+        self.capture_state.setObjectName('captureBadge')
+        self.capture_state.setProperty('recordingState', 'stopped')
+        top.addWidget(self.capture_state, 0, Qt.AlignmentFlag.AlignVCenter)
         self.capture_button = QPushButton('开始记录')
         self.capture_button.setObjectName('accent')
         self.capture_button.clicked.connect(self.toggle_capture)
-        top.addWidget(self.capture_button)
+        self.capture_button.ensurePolished()
+        capture_height = max(40, self.capture_button.sizeHint().height())
+        self.capture_button.setFixedHeight(capture_height)
+        self.capture_state.setFixedHeight(capture_height)
+        top.addWidget(self.capture_button, 0, Qt.AlignmentFlag.AlignVCenter)
         main.addLayout(top)
 
         tool = QHBoxLayout()
         date_capsule = QFrame()
+        self.date_capsule = date_capsule
         date_capsule.setObjectName('dateCapsule')
         date_row = QHBoxLayout(date_capsule)
-        date_row.setContentsMargins(8, 4, 8, 4)
-        prev = QPushButton('‹')
-        prev.setObjectName('ghost')
-        prev.setFixedWidth(36)
+        date_row.setContentsMargins(0, 0, 0, 0)
+        date_row.setSpacing(12)
+        prev = QPushButton()
+        prev.setIcon(icon('left', INK))
+        prev.setToolTip('上一天')
+        prev.setAccessibleName('上一天')
+        prev.setFixedSize(40, 38)
         prev.clicked.connect(lambda: self.shift_day(-1))
         self.date = QLineEdit(datetime.now().strftime('%Y-%m-%d'))
-        self.date.setFixedWidth(108)
+        self.date.setObjectName('dateField')
+        self.date.setFixedSize(200, 40)
+        self.date.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.date.addAction(icon('calendar'), QLineEdit.ActionPosition.LeadingPosition).triggered.connect(self.choose_date)
         self.date.returnPressed.connect(self.refresh)
-        nxt = QPushButton('›')
-        nxt.setObjectName('ghost')
-        nxt.setFixedWidth(36)
+        nxt = QPushButton()
+        nxt.setIcon(icon('right', INK))
+        nxt.setToolTip('下一天')
+        nxt.setAccessibleName('下一天')
+        nxt.setFixedSize(40, 38)
         nxt.clicked.connect(lambda: self.shift_day(1))
         date_row.addWidget(prev)
         date_row.addWidget(self.date)
         date_row.addWidget(nxt)
         tool.addWidget(date_capsule)
+        self.today_button = QPushButton('回到今天')
+        self.today_button.setObjectName('ghost')
+        self.today_button.clicked.connect(self.go_today)
+        tool.addWidget(self.today_button)
+        self.today_button.hide()
+        self.date.textChanged.connect(self._sync_date_controls)
         tool.addStretch()
         self.search = QLineEdit()
-        self.search.setPlaceholderText('筛选活动、分类、项目')
-        self.search.setFixedWidth(176)
+        self.search.setPlaceholderText('筛选活动、分类、项目、标签')
+        self.search.setObjectName('searchField')
+        self.search.addAction(icon('search'), QLineEdit.ActionPosition.LeadingPosition)
+        self.search.setMinimumWidth(150)
+        self.search.setMaximumWidth(300)
+        self.search.setMinimumHeight(40)
         self.search.textChanged.connect(self.filter_cards)
         tool.addWidget(self.search)
         self.pending_btn = QPushButton('待确认 0')
@@ -172,21 +230,24 @@ class DiaryMainWindow(QMainWindow):
 
         timeline_page = QWidget()
         tl = QVBoxLayout(timeline_page)
-        tl.setSpacing(10)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(18)
         summary = QFrame()
         summary.setObjectName('summaryCard')
         sum_col = QVBoxLayout(summary)
-        sum_col.setContentsMargins(14, 12, 14, 12)
+        sum_col.setContentsMargins(22, 14, 22, 14)
+        sum_col.setSpacing(6)
         head = QHBoxLayout()
-        head.addWidget(QLabel('今日概览'))
+        self.summary_title = QLabel('今日概览')
+        self.summary_title.setObjectName('summaryTitle')
+        head.addWidget(self.summary_title)
         head.addStretch()
         self.summary_toggle = QPushButton('收起')
         self.summary_toggle.setObjectName('ghost')
         self.summary_toggle.clicked.connect(self.collapse_summary)
-        head.addWidget(self.summary_toggle)
+        self.summary_toggle.hide()
         sum_col.addLayout(head)
-        self.summary_label = QLabel('活动还在整理中。')
-        self.summary_label.setWordWrap(True)
+        self.summary_label = ElidedLabel('活动还在整理中。', lines=2)
         self.summary_label.setObjectName('caption')
         sum_col.addWidget(self.summary_label)
         tl.addWidget(summary)
@@ -196,6 +257,7 @@ class DiaryMainWindow(QMainWindow):
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.timeline = TimelineWidget()
+        self.timeline_scroll = scroll
         scroll.setWidget(self.timeline)
         tl.addWidget(scroll, stretch=1)
         self.stack.addWidget(timeline_page)
@@ -210,8 +272,9 @@ class DiaryMainWindow(QMainWindow):
         self.settings_stack = QStackedWidget()
         self.settings_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.settings_tabs: dict[str, QPushButton] = {}
-        labels = ['我的日常', '当前项目', '分类颜色', '识别与学习', '采集与隐私', '模型与高级']
+        labels = ['我的日常', '当前项目', '识别与学习', '采集与隐私', '模型与高级']
         self.settings_pages: dict[str, QVBoxLayout] = {}
+        self.settings_page_widgets = {}
         for label in labels:
             btn = QPushButton(label)
             btn.setObjectName('ghost')
@@ -235,13 +298,24 @@ class DiaryMainWindow(QMainWindow):
             wrap.setSpacing(0)
             wrap.addWidget(scroll_s)
             self.settings_stack.addWidget(page)
+            self.settings_page_widgets[label] = page
             self.settings_pages[label] = body
         tab_row.addStretch(1)
         set_outer.addLayout(tab_row)
         set_outer.addWidget(self.settings_stack, 1)
         self.stack.addWidget(settings_page)
         self._build_settings()
-        self.show_settings('我的日常')
+        self.my_panel = MyPanel(self)
+        self.my_page = QTabWidget()
+        self.my_page.addTab(self.my_panel, '分类与标签')
+        for label, title in [('我的日常', '个人档案'), ('当前项目', '项目与环境')]:
+            page = self.settings_page_widgets[label]
+            self.settings_stack.removeWidget(page)
+            self.my_page.addTab(page, title)
+            tab_row.removeWidget(self.settings_tabs[label])
+            self.settings_tabs.pop(label).deleteLater()
+        self.stack.addWidget(self.my_page)
+        self.show_settings('采集与隐私')
 
         self.timeline.card_clicked.connect(self.open_card)
         self.timeline.card_confirm.connect(self.quick_confirm)
@@ -253,6 +327,9 @@ class DiaryMainWindow(QMainWindow):
         self._ai_timer = QTimer(self)
         self._ai_timer.timeout.connect(self._run_ai_tick)
         self._ai_timer.start(2000)
+        self._timeline_timer = QTimer(self)
+        self._timeline_timer.timeout.connect(self._refresh_live_timeline)
+        self._timeline_timer.start(1000)
 
         if preview_mode:
             self.capture_button.setEnabled(False)
@@ -260,7 +337,7 @@ class DiaryMainWindow(QMainWindow):
             QTimer.singleShot(0, self.sync_capture_state)
 
         self.refresh(load_profile=True)
-        self.navigate('今日', refresh=False)
+        self.navigate('时间线', refresh=False)
 
     def _settings_panel(self, page_key: str, title: str) -> QVBoxLayout:
         page = self.settings_pages[page_key]
@@ -310,7 +387,6 @@ class DiaryMainWindow(QMainWindow):
         daily.addLayout(btn_row)
         self.fields: dict[str, QLineEdit] = {}
         for key, label in [
-            ('activities', '活动分类（逗号分隔）'),
             ('hours', '常用时间（可选）'),
             ('workflow', '活动说明（可选）'),
         ]:
@@ -331,11 +407,6 @@ class DiaryMainWindow(QMainWindow):
         save_p.clicked.connect(self.save_profile)
         projects.addWidget(save_p)
 
-        cats = self._settings_panel('分类颜色', '分类与颜色')
-        self.categories_panel = CategoriesPanel(self)
-        self.categories_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        cats.addWidget(self.categories_panel)
-
         learning = self._settings_panel('识别与学习', 'AI 与记忆')
         sub = QLabel('默认不联网；开启后在本窗口内分批整理新活动。')
         sub.setObjectName('caption')
@@ -353,17 +424,16 @@ class DiaryMainWindow(QMainWindow):
         tool_col.setSpacing(8)
         for text, slot in [
             ('重试待识别活动', self.retry_ai),
-            ('管理学习规则', self.rule_dialog),
-            ('查看纠正记录', self.show_history),
-            ('查看规则建议', self.suggest_rules),
+            ('管理自动分类规则', self.rule_dialog),
+            ('查看 AI 纠正记录', self.show_history),
             ('导出个人记忆', self.export),
             ('删除个人记忆', self.forget),
         ]:
             btn = QPushButton(text)
-            btn.setObjectName('ghost')
+            btn.setObjectName('learningAction')
             btn.clicked.connect(slot)
-            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            tool_col.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            tool_col.addWidget(btn)
         tool_col.addStretch(1)
         learning.addLayout(tool_col)
 
@@ -420,14 +490,15 @@ class DiaryMainWindow(QMainWindow):
     def _style_nav(self):
         for name, btn in self.nav_buttons.items():
             btn.setObjectName('navActive' if name == self.page else 'nav')
+            symbol = dict(NAV_ITEMS)[name]
+            btn.setIcon(icon(symbol, ACCENT if name == self.page else '#34343B'))
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
     def show_settings(self, name):
-        index = list(self.settings_pages).index(name)
-        self.settings_stack.setCurrentIndex(index)
+        self.settings_stack.setCurrentWidget(self.settings_page_widgets[name])
         for label, btn in self.settings_tabs.items():
-            btn.setObjectName('navActive' if label == name else 'ghost')
+            btn.setObjectName('sectionTabActive' if label == name else 'sectionTab')
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
@@ -435,12 +506,12 @@ class DiaryMainWindow(QMainWindow):
         self.page = page
         self.only_review = False
         self._style_nav()
-        self.stack.setCurrentIndex(0 if page != '设置' else 1)
-        self.heading.setText({'今日': '今天', '历史记录': '历史', 'AI 复盘': '复盘'}.get(page, '今天'))
-        if page == '今日':
-            self.date.setText(datetime.now().strftime('%Y-%m-%d'))
-        if page == 'AI 复盘':
-            self.summary_label.show()
+        self.stack.setCurrentIndex({'设置': 1, '我的': 2}.get(page, 0))
+        self.heading.setText(page)
+        self.date_capsule.setVisible(page == '时间线')
+        self.search.setVisible(page not in ('我的', '设置'))
+        self.pending_btn.setVisible(page not in ('我的', '设置'))
+        self._sync_date_controls()
         if refresh:
             self.refresh()
 
@@ -450,6 +521,36 @@ class DiaryMainWindow(QMainWindow):
         except ValueError:
             return
         self.date.setText(day.strftime('%Y-%m-%d'))
+        self.refresh()
+
+    def choose_date(self):
+        menu = QMenu(self)
+        calendar = QCalendarWidget()
+        calendar.setGridVisible(False)
+        calendar.setSelectedDate(QDate.fromString(self.date.text(), 'yyyy-MM-dd'))
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(calendar)
+        menu.addAction(action)
+        def selected(day):
+            self.date.setText(day.toString('yyyy-MM-dd'))
+            menu.close()
+            self.refresh()
+        calendar.clicked.connect(selected)
+        menu.exec(self.date.mapToGlobal(self.date.rect().bottomLeft()))
+
+    def _sync_date_controls(self):
+        today = datetime.now().strftime('%Y-%m-%d')
+        try:
+            datetime.strptime(self.date.text(), '%Y-%m-%d')
+            historical = self.date.text() != today
+        except ValueError:
+            historical = False
+        self.today_button.setVisible(self.page == '时间线' and historical)
+        self.summary_title.setText('今日概览' if self.date.text() == today else '当日概览')
+
+    def go_today(self):
+        self.date.setText(datetime.now().strftime('%Y-%m-%d'))
+        self._sync_date_controls()
         self.refresh()
 
     def collapse_summary(self):
@@ -466,8 +567,9 @@ class DiaryMainWindow(QMainWindow):
 
     def run_job(self, fn, callback=None, quiet=False):
         if self.busy:
-            if not quiet:
-                QMessageBox.information(self, '正在处理', '请等待当前操作完成。')
+            if quiet:
+                return
+            self._job_queue.append((fn, callback, quiet))
             return
 
         def work():
@@ -490,11 +592,31 @@ class DiaryMainWindow(QMainWindow):
                 callback(value)
         except PersonalizationUpgradeBlocked as error:
             QMessageBox.warning(self, '需要先停止采集', str(error))
+        except ValueError as error:
+            if not quiet:
+                QMessageBox.warning(self, '请检查选择', str(error))
         except Exception:
             if not quiet:
                 QMessageBox.critical(self, '操作未完成', '请检查数据库状态；隐私操作前请停止采集。')
+        if not self.busy and self._job_queue:
+            queued_fn, queued_callback, queued_quiet = self._job_queue.pop(0)
+            self.run_job(queued_fn, queued_callback, queued_quiet)
 
-    def refresh(self, load_profile=False, quiet=False):
+    def _refresh_live_timeline(self):
+        if self.closed or self.preview_mode or self.busy or self.page != '时间线':
+            return
+        today = datetime.now().strftime('%Y-%m-%d')
+        if today != self._calendar_day:
+            if self.date.text() == self._calendar_day:
+                self.date.setText(today)
+            self._calendar_day = today
+            self._sync_date_controls()
+        if self.date.text() != today:
+            return
+        self.refresh(quiet=True, live=True)
+
+    def refresh(self, load_profile=False, quiet=False, live=False):
+        requested_day = self.date.text()
         try:
             day = datetime.strptime(self.date.text(), '%Y-%m-%d')
         except ValueError:
@@ -514,25 +636,29 @@ class DiaryMainWindow(QMainWindow):
                 fold_ms,
                 show_short_dwells=show_short_dwells(self.database),
             )
-            return raw, items, memory.profile(), memory.tasks(), memory.rules(), options(self.database)
+            if live:
+                return raw, items
+            return raw, items, memory.profile(), memory.tasks(), memory.rules(), options(self.database), memory.catalog()
 
         def show(data):
-            raw, items, profile, self.tasks, self.rules, config = data
+            if self.closed or self.date.text() != requested_day:
+                return
+            if live:
+                raw, items = data
+                self.rows = {r['interval_id']: r for r in raw}
+                if items != self.all_cards:
+                    self.all_cards = items
+                    self.summary_label.setText(concise_overview(items))
+                    count = sum(c['review'] for c in items)
+                    self.pending_btn.setText(f'待确认 {count}' + (' · 仅看待确认' if self.only_review else ''))
+                    self.filter_cards()
+                return
+            raw, items, profile, self.tasks, self.rules, config, catalog = data
             self.rows = {r['interval_id']: r for r in raw}
             activities = profile.get('activities') or list(DEFAULT_CATEGORIES)
             self.category_colors = bootstrap_category_colors(self.database, activities)
             self.all_cards = items
-            text = overview(items)
-            if self.review_cache:
-                current = {
-                    r['interval_id']: (r['label'], r['category'], r['project'], (r['end_ms'] - r['start_ms']) // 1000, r['reliability'], r['revision'])
-                    for r in rows
-                    if r['state'] == 'active'
-                }
-                if all(current.get(i) == v for i, v in self.review_cache['facts'].items()):
-                    text = 'AI 复盘 · 已授权活动（最多 100 段）\n' + self.review_cache['text']
-                else:
-                    self.review_cache = None
+            text = concise_overview(items)
             self.summary_label.setText(text)
             count = sum(c['review'] for c in items)
             self.pending_btn.setText(f'待确认 {count}' + (' · 仅看待确认' if self.only_review else ''))
@@ -556,12 +682,16 @@ class DiaryMainWindow(QMainWindow):
                     self.endpoint.setText(config['ai_endpoint'])
                 if config.get('ai_model'):
                     self.model.setText(config['ai_model'])
-            self.categories_panel.set_categories(
-                profile.get('activities') or list(DEFAULT_CATEGORIES),
-                self.category_colors,
-            )
+            self.set_catalog(catalog)
 
         self.run_job(read, show, quiet=quiet)
+
+    def set_catalog(self, catalog):
+        self.taxonomy = catalog
+        self.category_colors.update({c['path']: c['color'] for c in catalog['categories']})
+        self.my_panel.reload(catalog)
+        self.taxonomy_changed.emit(catalog)
+        self.filter_cards()
 
     def filter_cards(self):
         query = self.search.text().strip().casefold()
@@ -569,7 +699,7 @@ class DiaryMainWindow(QMainWindow):
             c
             for c in self.all_cards
             if (not self.only_review or c['review'])
-            and (not query or query in (c['title'] + ' ' + c['category'] + ' ' + c['project']).casefold())
+            and (not query or query in (c['title'] + ' ' + c['category'] + ' ' + c['project'] + ' ' + ' '.join('#' + t['name'] for t in c.get('tags', []))).casefold())
         ]
         self.timeline.set_cards(shown, self.category_colors)
 
@@ -595,20 +725,20 @@ class DiaryMainWindow(QMainWindow):
             self.confirm_cards([card])
 
     def confirm_cards(self, items):
-        dialog = ConfirmDialog(self, items[0]['title'], items[0]['category'], items[0]['project'])
+        common_tags = set(t['id'] for t in items[0].get('tags', []))
+        for item in items:
+            common_tags.intersection_update(t['id'] for t in item.get('tags', []))
+        dialog = ConfirmDialog(self, items[0]['title'], items[0]['category'], common_tags)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        label, category, project = dialog.values()
-        if not label:
-            return
+        category_id, tag_ids = dialog.values()
         ids = [r['interval_id'] for item in items for r in item['rows']]
 
         def work(memory):
             Classifier(memory).analyze(ids)
-            memory.feedback_many(ids, label, category, project, remember=True)
+            memory.confirm_selection(ids, category_id, tag_ids, remember=True)
 
         self.ai_cancel and self.ai_cancel.set()
-        self.review_cache = None
         self.run_job(work, lambda _: self.refresh())
 
     def _detail(self, row, evidence):
@@ -616,18 +746,20 @@ class DiaryMainWindow(QMainWindow):
             QMessageBox.information(self, '证据不可用', '活动尚未结束或证据已删除。')
             return
 
-        def submit(action, label, category, project, remember):
+        def submit(action, category_id, tag_ids):
             def work(memory):
                 if action == 'delete':
                     memory.delete_interval(row['interval_id'])
                     memory.repo.cleanup(memory.now())
                     return
                 Classifier(memory).analyze([row['interval_id']])
-                memory.feedback(row['interval_id'], label, category, project, action, remember)
+                if action == 'confirm':
+                    memory.confirm_selection([row['interval_id']], category_id, tag_ids)
+                else:
+                    memory.feedback(row['interval_id'], action=action)
                 memory.repo.cleanup(memory.now())
 
             self.ai_cancel and self.ai_cancel.set()
-            self.review_cache = None
             self.run_job(work, lambda _: self.refresh())
 
         DetailDialog(self, row, evidence, self.tasks, submit).exec()
@@ -650,7 +782,7 @@ class DiaryMainWindow(QMainWindow):
                 if key in ('activities', 'projects', 'software', 'websites')
                 else value
             )
-        self.run_job(lambda m: m.save_profile(profile), lambda _: self.refresh())
+        self.run_job(lambda m: m.save_profile(dict(profile, activities=m.profile()['activities'])), lambda _: self.refresh())
 
     def _save_show_short_dwells(self, enabled):
         save_options(self.database, show_short_dwells=enabled)
@@ -721,78 +853,18 @@ class DiaryMainWindow(QMainWindow):
         )
         self.ai_note.setText('已开启 · 后台批量整理新活动' if enabled else '已关闭 · 无云端发送')
         self.next_ai = 0
-        self.review_cache = None
 
     def retry_ai(self):
         self.next_ai = 0
         self.ai_note.setText('将在下一轮重试授权范围内的待识别活动。')
 
-    def category_dialog(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle('添加分类')
-        lay = QVBoxLayout(dialog)
-        name = QLineEdit()
-        lay.addWidget(QLabel('分类名称'))
-        lay.addWidget(name)
-        chosen = {'color': PALETTE[0]}
-        row = QHBoxLayout()
-        for color in PALETTE:
-            b = QPushButton('●')
-            b.setStyleSheet(f'background:{color}; color:white; border-radius:8px;')
-            b.clicked.connect(lambda checked=False, c=color: chosen.update(color=c))
-            row.addWidget(b)
-        lay.addLayout(row)
-        ok = QPushButton('保存分类')
-        ok.setObjectName('accent')
-
-        def save():
-            label = name.text().strip()
-            if not label:
-                return
-            dialog.accept()
-            self.run_job(lambda m: m.add_category(label, chosen['color']), lambda _: self.refresh())
-
-        ok.clicked.connect(save)
-        lay.addWidget(ok)
-        dialog.exec()
-
     def rule_dialog(self):
-        QMessageBox.information(
-            self,
-            '学习规则',
-            '完整规则编辑界面仍可通过 `daytrace.py ui --tk-diary` 打开 Tk 壳。\n'
-            '此处仅列出已有规则数量：' + str(len(self.rules)),
-        )
+        from .learning_widgets import RulesDialog, rule_rows
+        self.run_job(rule_rows, lambda rows: RulesDialog(self, rows).exec())
 
     def show_history(self):
-        def show(rows):
-            text = '\n\n'.join(
-                f"{datetime.fromtimestamp(r['created_ms']/1000):%Y-%m-%d %H:%M} · {r['action']} · {r['label'] or '—'}\n片段 {r['interval_id']}"
-                for r in rows
-            ) or '暂无纠正记录'
-            QMessageBox.information(self, '近期人工纠正', text)
-
-        self.run_job(lambda m: m.history(), show)
-
-    def suggest_rules(self):
-        def show(suggestions):
-            if not suggestions:
-                QMessageBox.information(self, '规则建议', '还没有足够多、内容相似的已保存纠正。')
-                return
-            tasks = {t['id']: t for t in self.tasks}
-            text = '\n\n'.join(
-                tasks[s['task_id']]['label'] + '\n' + json.dumps(s['conditions'], ensure_ascii=False)
-                for s in suggestions
-            )
-            if QMessageBox.question(self, '保存为未批准规则？', text[:1200]) == QMessageBox.StandardButton.Yes:
-
-                def work(memory):
-                    for s in suggestions:
-                        memory.save_rule(s['task_id'], s['conditions'], approved=False, origins=s['origins'])
-
-                self.run_job(work, lambda _: self.refresh())
-
-        self.run_job(lambda m: m.suggestions(), show)
+        from .learning_widgets import CorrectionsDialog
+        self.run_job(lambda m: m.correction_history(), lambda rows: CorrectionsDialog(self, rows).exec())
 
     def export(self):
         path, _ = QFileDialog.getSaveFileName(self, '导出个人记忆', '', 'JSON (*.json)')
@@ -802,7 +874,6 @@ class DiaryMainWindow(QMainWindow):
 
     def forget(self):
         if QMessageBox.question(self, '删除个人记忆', '删除档案、任务、案例和规则；原始采集保留。') == QMessageBox.StandardButton.Yes:
-            self.review_cache = None
             self.run_job(lambda m: m.forget(), lambda _: self.refresh())
 
     def set_key(self):
@@ -828,12 +899,15 @@ class DiaryMainWindow(QMainWindow):
         dialog.exec()
 
     def delete_key(self):
-        self.review_cache = None
         self.run_job(lambda m: Vault(self.endpoint.text().strip()).delete())
 
     def _update_capture_chrome(self, state: str) -> None:
         self.recording = state
-        self.capture_state.setText({'running': '正在记录', 'paused': '已暂停', 'stopped': '未开始记录'}[state])
+        self.capture_state.setText({'running': '●  正在记录', 'paused': 'Ⅱ  记录已暂停', 'stopped': '○  未开始记录'}[state])
+        self.capture_state.setProperty('recordingState', state)
+        self.capture_state.style().unpolish(self.capture_state)
+        self.capture_state.style().polish(self.capture_state)
+        self.capture_state.setAccessibleName(self.capture_state.text())
         self.capture_button.setText({'running': '暂停', 'paused': '恢复', 'stopped': '开始记录'}[state])
 
     def _apply_capture_state(self, state: str) -> None:
@@ -865,7 +939,6 @@ class DiaryMainWindow(QMainWindow):
     def toggle_capture(self) -> None:
         if self.preview_mode:
             return
-        self.review_cache = None
         state = self._sync_capture_state_blocking()
         if state == 'running':
             command = 'pause'
@@ -932,10 +1005,6 @@ class DiaryMainWindow(QMainWindow):
                     self.ai_note.setText(result['note'])
                 if result.get('cooldown'):
                     self.next_ai = time.monotonic() + result['cooldown']
-                if result.get('review') and result['review'].get('text'):
-                    self.review_cache = result['review']
-                    if not self.busy:
-                        self.refresh(quiet=True)
                 if not hasattr(self, 'loaded_preferences') and result.get('options'):
                     config = result['options']
                     self.loaded_preferences = True
@@ -952,19 +1021,10 @@ class DiaryMainWindow(QMainWindow):
             analyze = time.monotonic() >= self.next_ai
             if analyze:
                 self.next_ai = time.monotonic() + 60
-            try:
-                day = datetime.strptime(self.date.text(), '%Y-%m-%d')
-            except ValueError:
-                day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            start = int(day.timestamp() * 1000)
-            end = int((day + timedelta(days=1)).timestamp() * 1000)
-            previous = self.review_cache['key'] if self.review_cache else None
             cancel = self.ai_cancel
 
             def work():
                 result = tick(self.database, cancel, analyze)
-                if analyze and not result.get('cooldown'):
-                    result['review'] = review(self.database, cancel, start, end, previous)
                 return result
 
             self.ai_future = self.ai_executor.submit(work)
@@ -973,6 +1033,7 @@ class DiaryMainWindow(QMainWindow):
         self.closed = True
         self._capture_timer.stop()
         self._ai_timer.stop()
+        self._timeline_timer.stop()
         if self.collector_process and self.collector_process.poll() is None:
             from ...cli import control
 

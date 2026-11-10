@@ -193,7 +193,7 @@ class ProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'test.sqlite3'
             old = Repository(path)
-            self.assertEqual(old.db.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(old.db.execute('PRAGMA user_version').fetchone()[0], 3)
             old.close()
             memory = Memory(path)
             proposal = propose_profile('我用 VS Code 开发，Chrome 查竞品，password=secretvalue')
@@ -209,6 +209,10 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(memory.profile()['projects'], ['Other'])
             self.assertEqual(memory.db.execute('PRAGMA foreign_key_check').fetchall(), [])
             migration = Path(__file__).resolve().parents[1] / 'src/daytrace/storage/migrations/003_personalization_down.sql'
+            memory.db.executescript((migration.parent / '007_ai_corrections_down.sql').read_text('utf-8'))
+            memory.db.executescript((migration.parent / '006_taxonomy_colors_down.sql').read_text('utf-8'))
+            memory.db.executescript((migration.parent / '005_taxonomy_down.sql').read_text('utf-8'))
+            memory.db.executescript((migration.parent / '004_screenshots_down.sql').read_text('utf-8'))
             memory.db.executescript(migration.read_text('utf-8'))
             self.assertEqual(memory.db.execute('PRAGMA user_version').fetchone()[0], 2)
             memory.close()

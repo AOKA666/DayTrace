@@ -5,14 +5,10 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QListWidget,
     QMessageBox,
     QPushButton,
@@ -20,34 +16,37 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..classifier import Classifier
 from ..diary_model import duration
+from .taxonomy_widgets import ClassificationPicker
 
 
 class ConfirmDialog(QDialog):
-    def __init__(self, parent, title, category, project):
+    def __init__(self, parent, title, category='', tags=()):
         super().__init__(parent)
         self.setWindowTitle('确认活动')
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(560)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel('这些片段属于同一件事'))
-        form = QFormLayout()
-        self.name = QLineEdit(title)
-        self.cat = QLineEdit(category)
-        self.proj = QLineEdit(project)
-        form.addRow('活动名称', self.name)
-        form.addRow('分类', self.cat)
-        form.addRow('项目', self.proj)
-        layout.addLayout(form)
+        heading = QLabel(title)
+        heading.setWordWrap(True)
+        layout.addWidget(heading)
+        self.picker = ClassificationPicker(parent, category, tags, self)
+        layout.addWidget(self.picker)
         buttons = QDialogButtonBox()
-        save = buttons.addButton('确认并记住', QDialogButtonBox.ButtonRole.AcceptRole)
+        save = buttons.addButton('确认', QDialogButtonBox.ButtonRole.AcceptRole)
         save.setObjectName('accent')
+        buttons.addButton('取消', QDialogButtonBox.ButtonRole.RejectRole)
+        save.setEnabled(bool(self.picker.category.currentData()))
+        self.picker.category.currentIndexChanged.connect(lambda: save.setEnabled(bool(self.picker.category.currentData())))
         layout.addWidget(buttons)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
     def values(self):
-        return self.name.text().strip(), self.cat.text().strip(), self.proj.text().strip()
+        return self.picker.values()
+
+    def accept(self):
+        if self.picker.category.currentData():
+            super().accept()
 
 
 class FragmentDialog(QDialog):
@@ -112,22 +111,9 @@ class DetailDialog(QDialog):
             f"正文状态：{content_status}\n\n{evidence['text'] or '无可用正文，可根据自己的记忆纠正。'}\n\n{image_status}"
         )
         layout.addWidget(body)
-        form = QFormLayout()
-        self.name = QLineEdit(row.get('label') or '')
-        self.cat = QLineEdit(row.get('category') or '')
-        self.proj = QLineEdit(row.get('project') or '')
-        form.addRow('活动名称', self.name)
-        form.addRow('分类', self.cat)
-        form.addRow('项目', self.proj)
-        layout.addLayout(form)
-        self.tasks = QComboBox()
-        self.tasks.addItem('从候选任务选择…')
-        for task in tasks:
-            self.tasks.addItem(task['label'] + ' / ' + task['project'], task)
-        self.tasks.currentIndexChanged.connect(self._pick_task)
-        layout.addWidget(self.tasks)
-        self.remember = QCheckBox('记住这次纠正，作为历史案例（不会自动建立全局规则）')
-        layout.addWidget(self.remember)
+        self.picker = ClassificationPicker(parent, row.get('category') or '',
+                                            [t['id'] for t in row.get('tags', [])], self)
+        layout.addWidget(self.picker)
         bar = QHBoxLayout()
         for text, action in [
             ('确认并保存', 'confirm'),
@@ -139,6 +125,10 @@ class DetailDialog(QDialog):
             btn = QPushButton(text)
             btn.setObjectName('ghost')
             btn.clicked.connect(lambda checked=False, a=action: self._submit(a))
+            if action == 'confirm':
+                btn.setObjectName('accent')
+                btn.setEnabled(bool(self.picker.category.currentData()))
+                self.picker.category.currentIndexChanged.connect(lambda _index, button=btn: button.setEnabled(bool(self.picker.category.currentData())))
             bar.addWidget(btn)
         layout.addLayout(bar)
         delete = QPushButton('删除此活动及关联记录')
@@ -146,22 +136,15 @@ class DetailDialog(QDialog):
         delete.clicked.connect(self._delete)
         layout.addWidget(delete, alignment=Qt.AlignmentFlag.AlignRight)
 
-    def _pick_task(self, index):
-        if index <= 0:
-            return
-        task = self.tasks.itemData(index)
-        self.name.setText(task['label'])
-        self.cat.setText(task['category'])
-        self.proj.setText(task['project'])
-
     def _submit(self, action):
+        if action == 'confirm' and not self.picker.category.currentData():
+            return
         if action == 'private' and QMessageBox.question(self, '私人活动', '将删除此活动的应用、标题和纠正记录，只保留匿名时间。') != QMessageBox.StandardButton.Yes:
             return
-        label, category, project = self.name.text(), self.cat.text(), self.proj.text()
-        self.on_submit(action, label, category, project, self.remember.isChecked())
+        self.on_submit(action, *self.picker.values())
         self.accept()
 
     def _delete(self):
         if QMessageBox.question(self, '删除活动', '删除该片段及关联证据、修订。') == QMessageBox.StandardButton.Yes:
-            self.on_submit('delete', '', '', '', False)
+            self.on_submit('delete', None, [])
             self.accept()

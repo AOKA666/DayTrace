@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime
 from daytrace.personalization.diary_model import cards
-from daytrace.personalization.diary_worker import tick,review,validate,validate_review
+from daytrace.personalization.diary_worker import tick,validate
 from daytrace.personalization.store import Memory
 from daytrace.engine import Engine
 from daytrace.domain import Observation
@@ -112,25 +112,11 @@ class DiaryTests(unittest.TestCase):
         for row in rows:row['label']='工作'
         self.assertEqual(len(cards(rows)),3)
 
-    def test_review_scope_and_changed_source_rejection(self):
-        self.enable()
-        tick(self.path,threading.Event(),provider_factory=self.fake())
-        test=self
-        class Reviewer:
-            def __init__(inner,*args,**kwargs):pass
-            def classify(inner,payload):
-                test.assertEqual(payload['mode'],'review')
-                test.assertNotIn('text',payload['records'][0])
-                return [{'text':'主要在阅读接口资料，活动归属仍需确认。','interval_ids':[payload['records'][0]['interval_id']]}]
-        result=review(self.path,threading.Event(),self.start,self.now,provider_factory=Reviewer)
-        self.assertIn('text',result)
-        repeated=review(self.path,threading.Event(),self.start,self.now,result['key'],provider_factory=unittest.mock.Mock(side_effect=AssertionError()))
-        self.assertEqual(repeated,{'key':result['key']})
-        class DeletingReviewer(Reviewer):
-            def classify(inner,payload):
-                memory=Memory(test.path);memory.delete_interval(test.ids[0]);memory.close()
-                return super().classify(payload)
-        self.assertIsNone(review(self.path,threading.Event(),self.start,self.now,provider_factory=DeletingReviewer))
+    def test_review_feature_removed(self):
+        from daytrace.personalization import diary_worker
+        from daytrace.personalization.diary_theme import NAV_ITEMS
+        self.assertFalse(hasattr(diary_worker, 'review'))
+        self.assertNotIn('AI 复盘', [name for name, _ in NAV_ITEMS])
 
     def test_invalid_model_fields_are_rejected(self):
         payload={'evidence':[{'interval_id':'1','evidence_ids':['e1']}],'categories':['工作'],'projects':[]}
@@ -138,7 +124,6 @@ class DiaryTests(unittest.TestCase):
         self.assertEqual(validate([dict(entry)],payload)[0]['label'],'阅读资料')
         for updates in [{'evidence_ids':['other']},{'interval_id':'other'},{'category':'invented'},{'project':'invented'},{'start_ms':1}]:
             with self.assertRaises(ValueError):validate([{**entry,**updates}],payload)
-        with self.assertRaises(ValueError):validate_review([{'text':'总结','interval_ids':['other']}],{'records':[{'interval_id':'1'}]})
 
     def test_bulk_confirmation_and_boundary_refusal(self):
         tick(self.path,threading.Event())
@@ -161,7 +146,7 @@ class DiaryTests(unittest.TestCase):
             deadline=time.monotonic()+5
             while app.busy and time.monotonic()<deadline:root.update();time.sleep(.01)
             self.assertFalse(app.busy)
-            self.assertEqual(list(app.nav),['今日','历史记录','AI 复盘','设置'])
+            self.assertEqual(list(app.nav),['时间线','设置'])
             memory=Memory(self.path);rows=memory.timeline();memory.close()
             items=cards(rows)*3000
             app.diary.set_cards(items,{})
@@ -171,7 +156,7 @@ class DiaryTests(unittest.TestCase):
             self.assertEqual(ids,app.diary.find_all())
             app.navigate('设置',refresh=False)
             self.assertEqual(app.tabs.select(),str(app.profile_tab))
-            app.navigate('历史记录',refresh=False)
+            app.navigate('时间线',refresh=False)
             self.assertEqual(app.tabs.select(),str(app.timeline_tab))
             self.assertIsNone(app.provider)
         finally:app.close()

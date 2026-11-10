@@ -15,6 +15,11 @@ DEFAULT_CATEGORY_COLORS = {
 }
 
 
+def default_tag_color(name):
+    colors = ('#6550B5', '#23776D', '#96601F', '#3568A6', '#A04774', '#586B28')
+    return colors[int(hashlib.sha256(name.encode('utf-8')).hexdigest()[:8], 16) % len(colors)]
+
+
 def category_color(name, colors):
     if not name:
         return '#BEC7D3'

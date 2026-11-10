@@ -374,7 +374,7 @@ class ContentStorageTests(unittest.TestCase):
         repo = Repository(self.path)
         try:
             self.assertEqual(repo.device_id, 'existing')
-            self.assertEqual(repo.db.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(repo.db.execute('PRAGMA user_version').fetchone()[0], 3)
             self.assertEqual(repo.db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         finally:
             repo.close()

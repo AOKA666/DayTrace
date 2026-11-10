@@ -69,7 +69,7 @@ class Repository:
             # New databases ship with personalization (v3) so UI can open while collector runs.
             self.db.executescript((root / "003_personalization.sql").read_text("utf-8"))
             version = 3
-        elif version not in (2, 3, 4):
+        elif version not in (2, 3, 4, 5, 6, 7):
             self.db.close()
             raise RuntimeError("Unsupported database schema version.")
         with self.db:

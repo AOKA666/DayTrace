@@ -5,6 +5,7 @@ from pathlib import Path
 from ..content.policy import normalize
 from ..storage.repository import Repository, InstanceLock, uid
 from .profile import clean_profile
+from .taxonomy import TaxonomyMixin, migrate as migrate_taxonomy
 
 DAY = 86_400_000
 MIGRATION_003 = Path(__file__).parents[1] / 'storage/migrations/003_personalization.sql'
@@ -19,13 +20,14 @@ def personalization_schema_ready(db) -> bool:
     return row is not None
 
 
-class Memory:
+class Memory(TaxonomyMixin):
     def __init__(self, path, now=None, cleanup=True):
         self.repo = Repository(Path(path))
         self.db = self.repo.db
         self.now = now or (lambda: time.time_ns() // 1_000_000)
         try:
             self._upgrade_personalization_if_needed(Path(path))
+            migrate_taxonomy(self)
             if cleanup:
                 self.repo.cleanup(self.now())
         except BaseException:
@@ -64,6 +66,13 @@ class Memory:
         value = clean_profile(value)
         with self.repo.transaction():
             self.db.execute('INSERT INTO personal_profile VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', (json.dumps(value, ensure_ascii=False),))
+            existing = {r['path']: r for r in self.catalog()['categories']}
+            for name, row in existing.items():
+                if name not in value['activities'] and not any(x.startswith(name + ' / ') for x in value['activities']):
+                    self.db.execute('UPDATE personal_categories SET active=0 WHERE id=?', (row['id'],))
+            for name in value['activities']:
+                if name not in existing:
+                    self.db.execute('INSERT INTO personal_categories VALUES (?,?,NULL,?,1) ON CONFLICT DO UPDATE SET active=1', (uid(), name, '#7566D9'))
             self.invalidate_automatic()
         return value
 
@@ -188,7 +197,7 @@ class Memory:
         return [r[0] for r in self.db.execute("SELECT id FROM activity_intervals WHERE state='active' AND end_ms>start_ms ORDER BY start_ms")]
 
     def timeline(self, start_ms=None, end_ms=None):
-        return [dict(r) for r in self.db.execute('''SELECT i.id AS interval_id,i.start_ms,i.end_ms,i.state,
+        rows = [dict(r) for r in self.db.execute('''SELECT i.id AS interval_id,i.start_ms,i.end_ms,i.state,
           CASE WHEN i.state='active' AND i.start_ms>=? THEN i.title END AS title,i.app_id,
           EXISTS(SELECT 1 FROM activity_events ge WHERE ge.session_id=i.session_id AND ge.at_ms=i.start_ms AND ge.kind='dwell_gap') AS short_gap,
           i.process_name,s.timezone,s.device_id,s.platform,i.session_id,
@@ -198,6 +207,12 @@ class Memory:
           LEFT JOIN task_results r ON r.interval_id=i.id LEFT JOIN personal_tasks t ON t.id=r.task_id
           WHERE i.end_ms>i.start_ms AND i.end_ms>? AND i.start_ms<? ORDER BY i.start_ms''',
           (self.now()-7*DAY,max(self.now()-90*DAY,start_ms or 0),end_ms if end_ms is not None else 2**63-1))]
+        tags = {}
+        for tag in self.db.execute('SELECT a.interval_id,t.id,t.name,t.color FROM activity_tags a JOIN personal_tags t ON t.id=a.tag_id ORDER BY t.name'):
+            tags.setdefault(tag['interval_id'], []).append({'id': tag['id'], 'name': tag['name'], 'color': tag['color']})
+        for row in rows:
+            row['tags'] = tags.get(row['interval_id'], [])
+        return rows
 
     def feedback(self, interval_id, label='', category='', project='', action='confirm', remember=False):
         if action == 'private':
@@ -219,7 +234,7 @@ class Memory:
         with self.repo.transaction():
             for row in rows:self._feedback(row['id'],label,category,project,'confirm',remember,transaction=False)
 
-    def _feedback(self, interval_id, label='', category='', project='', action='confirm', remember=False, transaction=True):
+    def _feedback(self, interval_id, label='', category='', project='', action='confirm', remember=False, transaction=True, correction_from=None):
         if action not in ('confirm', 'unknown', 'ignore', 'private', 'undo'):
             raise ValueError('Invalid feedback action')
         from contextlib import nullcontext
@@ -227,6 +242,7 @@ class Memory:
             result = self.db.execute('SELECT * FROM task_results WHERE interval_id=?', (interval_id,)).fetchone()
             if not result:
                 raise ValueError('Analyze this interval first')
+            self.db.execute('DELETE FROM activity_tags WHERE interval_id=?', (interval_id,))
             self.db.execute('DELETE FROM learned_rules WHERE id IN (SELECT rule_id FROM rule_origins WHERE interval_id=?)', (interval_id,))
             self.db.execute('DELETE FROM activity_cases WHERE interval_id=?', (interval_id,))
             if action == 'private':
@@ -234,7 +250,10 @@ class Memory:
                 return
             task = self.task(label, category, project) if action == 'confirm' else None
             previous = self.db.execute('SELECT id FROM activity_feedback WHERE interval_id=? ORDER BY rowid DESC LIMIT 1', (interval_id,)).fetchone()
-            self.db.execute('INSERT INTO activity_feedback VALUES (?,?,?,?,?,?)', (uid(), interval_id, task, action, self.now(), previous[0] if previous else None))
+            feedback_id = uid()
+            self.db.execute('INSERT INTO activity_feedback VALUES (?,?,?,?,?,?)', (feedback_id, interval_id, task, action, self.now(), previous[0] if previous else None))
+            if correction_from is not None:
+                self.db.execute('INSERT INTO ai_corrections VALUES (?,?)', (feedback_id, correction_from))
             self.db.execute('''UPDATE task_results SET task_id=?,reliability=?,source=?,reason=?,manual=?,disposition=?,revision=revision+1 WHERE interval_id=?''',
                 (task, 'supported' if task else 'unknown', 'human' if action != 'undo' else 'pending',
                  '人工确认' if task else '用户选择：' + action, int(action != 'undo'),
@@ -272,7 +291,7 @@ class Memory:
             self.repo.cleanup(self.now())
 
     def save_rule(self, task, conditions, approved=False, rule_id=None, origins=()):
-        allowed = {'app', 'title', 'keywords', 'exclude', 'project', 'context', 'url_prefix'}
+        allowed = {'app', 'title', 'title_exact', 'keywords', 'exclude', 'project', 'context', 'url_prefix'}
         if not isinstance(conditions, dict) or set(conditions) - allowed:
             raise ValueError('Invalid rule fields')
         cleaned = {}
@@ -285,7 +304,7 @@ class Memory:
                 cleaned[key] = normalize(value)[:200]
             else:
                 raise ValueError('Invalid rule condition')
-        if not any(cleaned.get(k) for k in ('title', 'keywords', 'project', 'context', 'url_prefix')):
+        if not any(cleaned.get(k) for k in ('title', 'title_exact', 'keywords', 'project', 'context', 'url_prefix')):
             raise ValueError('An application alone cannot define a task')
         identifier = rule_id or uid()
         with self.repo.transaction():
@@ -321,9 +340,18 @@ class Memory:
     def history(self):
         return [dict(r) for r in self.db.execute('SELECT f.*,t.label FROM activity_feedback f LEFT JOIN personal_tasks t ON t.id=f.task_id ORDER BY f.created_ms DESC LIMIT 100')]
 
+    def correction_history(self):
+        return [dict(r) for r in self.db.execute('''SELECT f.created_ms,t.label,t.category,c.previous_category
+            FROM ai_corrections c JOIN activity_feedback f ON f.id=c.feedback_id
+            JOIN personal_tasks t ON t.id=f.task_id ORDER BY f.created_ms DESC,f.rowid DESC LIMIT 100''')]
+
     def export(self):
         from ..preferences import options
         return {'schema_version': 1, 'profile': self.profile(), 'tasks': self.tasks(), 'rules': self.rules(),
+                'taxonomy': self.catalog(),
+                'ai_corrections': [dict(r) for r in self.db.execute('SELECT * FROM ai_corrections')],
+                'activity_tags': [dict(r) for r in self.db.execute('SELECT * FROM activity_tags')],
+                'feedback_tags': [dict(r) for r in self.db.execute('SELECT * FROM feedback_tags')],
                 'category_colors': options(self.repo.path).get('category_colors', {}),
                 'feedback': [dict(r) for r in self.db.execute('SELECT * FROM activity_feedback ORDER BY created_ms')],
                 'rule_origins': [dict(r) for r in self.db.execute('SELECT * FROM rule_origins')],
@@ -348,7 +376,7 @@ class Memory:
         from ..preferences import save_options
         save_options(self.repo.path, category_colors={})
         with self.repo.transaction():
-            for table in ('activity_cases', 'activity_feedback', 'task_results', 'learned_rules', 'personal_tasks', 'personal_profile', 'analysis_runs'):
+            for table in ('activity_tags', 'feedback_tags', 'personal_tags', 'personal_categories', 'activity_cases', 'activity_feedback', 'task_results', 'learned_rules', 'personal_tasks', 'personal_profile', 'analysis_runs'):
                 self.db.execute('DELETE FROM ' + table)
             self.db.execute('UPDATE personal_state SET generation=generation+1 WHERE id=1')
         self.db.execute('PRAGMA wal_checkpoint(TRUNCATE)')

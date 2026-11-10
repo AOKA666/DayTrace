@@ -12,49 +12,6 @@ from ..storage.repository import is_running
 from ..content.policy import normalize
 
 
-def validate_review(response,payload):
-    if not isinstance(response,list) or len(response)!=1:raise ValueError('Invalid review')
-    item=response[0]
-    if not isinstance(item,dict) or set(item)!={'text','interval_ids'}:raise ValueError('Invalid review fields')
-    if not isinstance(item['text'],str) or not 1<=len(item['text'])<=180:raise ValueError('Invalid review text')
-    ids=item['interval_ids'];allowed={r['interval_id'] for r in payload['records']}
-    if not isinstance(ids,list) or not ids or any(not isinstance(i,str) for i in ids) or not set(ids)<=allowed:raise ValueError('Invalid review references')
-    item['text']=normalize(item['text'])
-    return item
-
-
-def review(database,cancel,start,end,previous_key=None,provider_factory=TextProvider):
-    """Ephemeral summary, invalidated on any source change; never stored as fact."""
-    memory=Memory(database,cleanup=False)
-    try:
-        config=options(database)
-        if config.get('auto_ai') is not True or not isinstance(config.get('ai_since_ms'),int):return None
-        records=[dict(interval_id=r['interval_id'],label=r['label'],category=r['category'],project=r['project'],
-            duration_seconds=(r['end_ms']-r['start_ms'])//1000,reliability=r['reliability'],revision=r['revision'])
-            for r in memory.timeline(max(start,config['ai_since_ms']),end) if r['start_ms']>=config['ai_since_ms'] and r['end_ms']<=end and r['label'] and r['state']=='active']
-        if not records:return None
-        # Bounded scope is explicitly identified in the UI, never called a complete day.
-        records=records[-100:]
-        key=signature(records)
-        if key==previous_key:return {'key':key}
-        generation=memory.generation();control_version=controls(memory)
-        facts={r['interval_id']:(r['label'],r['category'],r['project'],r['duration_seconds'],r['reliability'],r['revision']) for r in records}
-        def valid():
-            if cancel.is_set() or policy(options(database))!=policy(config) or generation!=memory.generation() or controls(memory)!=control_version or capture_state(memory)=='paused':return False
-            current={r['interval_id']:(r['label'],r['category'],r['project'],(r['end_ms']-r['start_ms'])//1000,r['reliability'],r['revision']) for r in memory.timeline(max(start,config['ai_since_ms']),end) if r['state']=='active'}
-            return all(current.get(identifier)==value for identifier,value in facts.items())
-        if not valid():return None
-        payload={'mode':'review','records':records}
-        provider=provider_factory(config.get('ai_endpoint') or DEEPSEEK_ENDPOINT,config.get('ai_model') or DEEPSEEK_MODEL,budget=2)
-        provider.cancelled=cancel;provider.send_guard=valid
-        try:answer=validate_review(provider.classify(payload),payload)
-        except Exception:return None
-        if not valid():return None
-        return {'key':key,'text':answer['text'],'ids':answer['interval_ids'],'generation':generation,
-            'facts':facts}
-    finally:memory.close()
-
-
 def validate(response,payload):
     if not isinstance(response,list) or len(response)>len(payload['evidence']):raise ValueError('Invalid diary response')
     allowed={e['interval_id']:set(e['evidence_ids']) for e in payload['evidence']}

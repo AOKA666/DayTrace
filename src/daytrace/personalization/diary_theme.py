@@ -46,9 +46,7 @@ FONT_CARD_META = ('Microsoft YaHei UI', 9)
 BLUE = ACCENT
 
 NAV_ITEMS = (
-    ('今日', '◷'),
-    ('历史记录', '▤'),
-    ('AI 复盘', '◇'),
+    ('时间线', '◷'),
     ('设置', '⚙'),
 )
 

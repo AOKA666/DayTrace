@@ -19,6 +19,8 @@ def matches(conditions, evidence):
         return False
     if conditions.get('title') and conditions['title'].casefold() not in evidence['title'].casefold():
         return False
+    if conditions.get('title_exact') and conditions['title_exact'].casefold() != (evidence['title'] or '').casefold():
+        return False
     if conditions.get('url_prefix') and not evidence['url'].startswith(conditions['url_prefix']):
         return False
     if any(w.casefold() not in text for w in conditions.get('keywords', [])):
@@ -124,9 +126,40 @@ class Classifier:
                   task_id=excluded.task_id,reliability=excluded.reliability,source=excluded.source,
                   reason=excluded.reason,revision=task_results.revision+1''',
                   (evidence['id'], evidence['event_id'], task, reliability, source, reason))
+                if task and source in ('rule', 'history'):
+                    self._apply_remembered_tags(evidence['id'], task, source)
                 count += 1
             self.memory.db.execute('INSERT INTO analysis_runs VALUES (?,?,?,?)', (uid(), self.memory.now(), count, 'layered'))
         return count
+
+    def _apply_remembered_tags(self, interval_id, task, source):
+        tag_ids = []
+        if source == 'rule':
+            row = self.memory.db.execute(
+                '''SELECT o.interval_id FROM rule_origins o
+                JOIN learned_rules r ON r.id=o.rule_id
+                JOIN activity_feedback f ON f.interval_id=o.interval_id
+                WHERE r.task_id=? AND r.enabled=1 AND r.approved=1
+                ORDER BY f.created_ms DESC, f.rowid DESC LIMIT 1''',
+                (task,),
+            ).fetchone()
+            if row:
+                tag_ids = [r[0] for r in self.memory.db.execute(
+                    'SELECT tag_id FROM activity_tags WHERE interval_id=? ORDER BY tag_id', (row[0],))]
+        elif source == 'history':
+            row = self.memory.db.execute(
+                '''SELECT c.interval_id FROM activity_cases c
+                JOIN activity_feedback f ON f.interval_id=c.interval_id
+                WHERE c.task_id=? AND c.interval_id!=?
+                ORDER BY f.created_ms DESC, f.rowid DESC LIMIT 1''',
+                (task, interval_id),
+            ).fetchone()
+            if row:
+                tag_ids = [r[0] for r in self.memory.db.execute(
+                    'SELECT tag_id FROM activity_tags WHERE interval_id=? ORDER BY tag_id', (row[0],))]
+        self.memory.db.execute('DELETE FROM activity_tags WHERE interval_id=?', (interval_id,))
+        if tag_ids:
+            self.memory.db.executemany('INSERT INTO activity_tags VALUES (?,?)', ((interval_id, tag) for tag in tag_ids))
 
     def payload(self, evidence):
         tasks=self.memory.tasks()

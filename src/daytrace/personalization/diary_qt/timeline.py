@@ -1,227 +1,248 @@
-"""Virtualized timeline painted on a Qt canvas."""
-from __future__ import annotations
-
+"""Layout-based activity cards, recycled for the visible portion of the timeline."""
 from datetime import datetime
+from math import ceil
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QSizePolicy, QWidget
-
-from ..category_palette import category_color, contrasting_text
-from ..diary_model import duration
-from .theme import (
-    ACCENT,
-    BG,
-    BORDER,
-    FAINT,
-    GAP_BORDER,
-    GAP_FILL,
-    INK,
-    MUTED,
-    PENDING_BG,
-    PENDING_BORDER,
-    PENDING_INK,
-    SHADOW,
-    SURFACE,
+from PySide6.QtCore import QEvent, QPointF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtWidgets import (
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QSizePolicy, QSpacerItem, QVBoxLayout, QWidget,
 )
+from ..category_palette import category_color
+from ..diary_model import duration
+from .primitives import ElidedLabel
+from .theme import ACCENT, BG, BORDER, CARD_GAP, CARD_HEIGHT, FAINT, pill_style
+
+
+class ActivityCard(QFrame):
+    clicked = Signal()
+    confirmed = Signal()
+    hovered = Signal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName('activityCard')
+        self.setFixedHeight(CARD_HEIGHT)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(20, 10, 18, 10)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(0)
+        grid.setColumnStretch(0, 1)
+        self.duration = QLabel()
+        self.duration.setObjectName('activityDuration')
+        self.title = ElidedLabel()
+        self.title.setObjectName('activityTitle')
+        self.description = ElidedLabel()
+        self.description.setObjectName('activityDescription')
+        self.footer = ElidedLabel()
+        self.footer.setObjectName('activityFooter')
+        self.category = QLabel()
+        self.category.setMaximumWidth(220)
+        self.category.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status = QLabel()
+        self.status.setObjectName('confirmedState')
+        self.confirm = QPushButton('待确认')
+        self.confirm.setObjectName('pendingChip')
+        self.confirm.clicked.connect(self.confirmed)
+        grid.addWidget(self.duration, 0, 0)
+        grid.addWidget(self.category, 0, 1, alignment=Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self.title, 1, 0)
+        grid.addWidget(self.description, 2, 0)
+        grid.addWidget(self.footer, 3, 0)
+        grid.addWidget(self.status, 2, 1, 2, 1, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+        grid.addWidget(self.confirm, 2, 1, 2, 1, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+        for label in (self.duration, self.title, self.description, self.footer, self.category, self.status):
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def bind(self, card, colors):
+        active = card['rows'][0]['state'] == 'active'
+        self.setProperty('gap', not active)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.duration.setText(duration(card['end_ms'] - card['start_ms']))
+        self.title.setText(card['title'])
+        self.description.setText(card.get('description') or '')
+        footer = []
+        if card.get('project'):
+            footer.append('项目 · ' + card['project'])
+        footer.extend('#' + t['name'] for t in card.get('tags', []))
+        self.footer.setText('   '.join(footer))
+        self.footer.setVisible(bool(footer))
+        category = card.get('category') or ''
+        self.category.setVisible(bool(category and category != '待确认'))
+        self.category.setText(self.category.fontMetrics().elidedText(category, Qt.TextElideMode.ElideRight, 190))
+        self.category.setToolTip(category)
+        self.category.setStyleSheet(pill_style(category_color(category, colors)))
+        pending = active and bool(card.get('review'))
+        self.confirm.setVisible(pending)
+        self.status.setVisible(not pending and bool(card.get('status')))
+        self.status.setText(card.get('status') or '')
+        self.setToolTip(card['title'])
+        self.setAccessibleName(card['title'])
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        else:
+            super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit()
+        else:
+            super().keyPressEvent(event)
+
+    def enterEvent(self, event):
+        self.hovered.emit(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hovered.emit(False)
+        super().leaveEvent(event)
+
+
+class TimeRail(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedWidth(84)
+        self.active = True
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 9, 23, 0)
+        layout.setSpacing(2)
+        self.start = QLabel()
+        self.start.setObjectName('timeStart')
+        self.end = QLabel()
+        self.end.setObjectName('timeEnd')
+        layout.addWidget(self.start)
+        layout.addWidget(self.end)
+        layout.addStretch()
+
+    def bind(self, card):
+        self.start.setText(datetime.fromtimestamp(card['start_ms'] / 1000).strftime('%H:%M'))
+        self.end.setText(datetime.fromtimestamp(card['end_ms'] / 1000).strftime('%H:%M'))
+        self.active = card['rows'][0]['state'] == 'active'
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(BORDER), 1.5))
+        painter.drawLine(77, 0, 77, self.height())
+        painter.setPen(QPen(QColor(BG), 2))
+        painter.setBrush(QColor(ACCENT if self.active else FAINT))
+        painter.drawEllipse(QPointF(77, 22), 4.5, 4.5)
+
+
+class TimelineRow(QWidget):
+    def __init__(self, timeline):
+        super().__init__()
+        self.timeline = timeline
+        self.card = None
+        self.setFixedHeight(timeline.pitch)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, CARD_GAP)
+        row.setSpacing(20)
+        self.rail = TimeRail()
+        self.frame = ActivityCard()
+        row.addWidget(self.rail)
+        row.addWidget(self.frame, 1)
+        self.frame.clicked.connect(lambda: timeline.card_clicked.emit(self.card))
+        self.frame.confirmed.connect(lambda: timeline.card_confirm.emit(self.card))
+        self.frame.hovered.connect(lambda entered: timeline.card_hovered.emit(self.card['rows'][0]['interval_id'] if entered and self.card else ''))
+
+    def bind(self, card, colors):
+        if card == self.card and colors == getattr(self, '_colors', None):
+            return
+        self.card = card
+        self._colors = dict(colors)
+        self.rail.bind(card)
+        self.frame.bind(card, colors)
 
 
 class TimelineWidget(QWidget):
     card_clicked = Signal(object)
     card_confirm = Signal(object)
     card_hovered = Signal(str)
-
-    pitch = 104
-    rail = 86
+    pitch = CARD_HEIGHT + CARD_GAP
+    rail = 100
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.cards: list = []
-        self.colors: dict = {}
-        self.hover_index: int | None = None
-        self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.cards, self.colors = [], {}
+        self._pool = []
+        self._scroll = None
+        self._pending = False
+        self._column = QVBoxLayout(self)
+        self._column.setContentsMargins(4, 6, 4, 6)
+        self._column.setSpacing(0)
+        self._top = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._bottom = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._column.addItem(self._top)
+        self._column.addItem(self._bottom)
+        self.empty = QLabel('所选日期暂无活动记录\n可以切换日期查看其他记录')
+        self.empty.setObjectName('caption')
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setMinimumHeight(220)
+        self._column.addWidget(self.empty)
+        self._column.addStretch()
 
     def set_cards(self, cards, colors):
-        self.cards = cards
-        self.colors = colors
-        h = 24 + max(1, len(cards)) * self.pitch
-        self.setMinimumHeight(h)
-        self.update()
+        self.cards, self.colors = cards, colors
+        self.setMinimumHeight(12 + len(cards) * self.pitch if cards else 240)
+        self.empty.setVisible(not cards)
+        self._sync_rows()
 
-    def _geom(self, index):
-        y = 6 + index * self.pitch
-        left = self.rail + 8
-        right = max(520, self.width()) - 16
-        bottom = y + self.pitch - 8
-        return left, right, y, bottom
+    def _attach(self):
+        if self._scroll:
+            return
+        parent = self.parentWidget()
+        while parent and not isinstance(parent, QScrollArea):
+            parent = parent.parentWidget()
+        if parent:
+            self._scroll = parent
+            parent.verticalScrollBar().valueChanged.connect(self._sync_rows)
+            parent.viewport().installEventFilter(self)
 
-    def _index_at(self, pos):
-        if pos.y() < 8:
-            return None
-        index = int((pos.y() - 8) // self.pitch)
-        return index if 0 <= index < len(self.cards) else None
+    def _sync_rows(self, *_):
+        self._pending = False
+        self._attach()
+        offset = self._scroll.verticalScrollBar().value() if self._scroll else 0
+        height = self._scroll.viewport().height() if self._scroll else min(self.height(), 1000)
+        first = max(0, offset // self.pitch - 1)
+        first = min(first, max(0, len(self.cards) - 1))
+        count = min(max(0, len(self.cards) - first), ceil(max(1, height) / self.pitch) + 3)
+        while len(self._pool) < count:
+            widget = TimelineRow(self)
+            self._column.insertWidget(1 + len(self._pool), widget)
+            self._pool.append(widget)
+        for index, row in enumerate(self._pool):
+            row.setVisible(index < count)
+            if index < count:
+                row.bind(self.cards[first + index], self.colors)
+        self._top.changeSize(0, first * self.pitch, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        remaining = max(0, len(self.cards) - first - count)
+        self._bottom.changeSize(0, remaining * self.pitch, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._column.invalidate()
 
-    def _category_chip_rect(self, painter, index, category):
-        left, right, y, _bottom = self._geom(index)
-        label = category[:16]
-        pill_w = min(168, painter.fontMetrics().horizontalAdvance(label) + 22)
-        return QRectF(right - pill_w - 10, y + 7, pill_w, 22)
+    def _schedule(self):
+        if not self._pending:
+            self._pending = True
+            QTimer.singleShot(0, self._sync_rows)
 
-    def _chip_rect(self, index):
-        card = self.cards[index]
-        if not card.get('review'):
-            return None
-        left, right, _y, bottom = self._geom(index)
-        chip_w = min(128, 26 + len(card['status']) * 9)
-        return QRectF(right - chip_w - 10, bottom - 24, chip_w, 20)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._schedule()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._schedule()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Resize:
+            self._schedule()
+        return super().eventFilter(watched, event)
 
     def sizeHint(self):
-        return super().sizeHint()
-
-    def wheelEvent(self, event):
-        event.ignore()
-
-    def paintEvent(self, _event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor(BG))
-        rail_x = self.rail - 18
-        if self.cards:
-            painter.setPen(QPen(QColor(BORDER), 1))
-            painter.drawLine(rail_x, 8, rail_x, len(self.cards) * self.pitch + 16)
-
-        vis = self.visibleRegion().boundingRect()
-        first = max(0, int(max(0, vis.top()) // self.pitch) - 2)
-        last = min(len(self.cards), int(max(vis.bottom(), self.height()) // self.pitch) + 3)
-
-        dur_font = QFont('Segoe UI', 12)
-        dur_font.setBold(True)
-        title_font = QFont('Microsoft YaHei UI', 10)
-        title_font.setBold(True)
-        meta_font = QFont('Microsoft YaHei UI', 9)
-        chip_font = QFont('Microsoft YaHei UI', 9)
-        chip_font.setBold(True)
-        time_font = QFont('Segoe UI', 10)
-        time_font.setBold(True)
-        time_end = QFont('Segoe UI', 8)
-
-        for index in range(first, last):
-            card = self.cards[index]
-            left, right, y, bottom = self._geom(index)
-            active = card['rows'][0]['state'] == 'active'
-            hovered = index == self.hover_index
-            h_card = bottom - y
-
-            path = QPainterPath()
-            path.addRoundedRect(QRectF(left, y, right - left, h_card), 10, 10)
-            fill = QColor(SURFACE if active else GAP_FILL)
-            painter.fillPath(path, fill)
-            border = QColor(ACCENT if hovered and active else GAP_BORDER if not active else BORDER)
-            painter.setPen(QPen(border, 1.5 if hovered else 1))
-            painter.drawPath(path)
-
-            dot = QColor(ACCENT if active and card.get('category') and card.get('category') != '待确认' else FAINT)
-            painter.setBrush(dot)
-            painter.setPen(QPen(QColor(BG), 2))
-            painter.drawEllipse(QPointF(rail_x, y + (bottom - y) // 2), 4, 4)
-
-            start = datetime.fromtimestamp(card['start_ms'] / 1000)
-            end = datetime.fromtimestamp(card['end_ms'] / 1000)
-            painter.setFont(time_font)
-            painter.setPen(QColor(INK if active else MUTED))
-            painter.drawText(QRectF(rail_x - 56, y + 8, 50, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, start.strftime('%H:%M'))
-            painter.setFont(time_end)
-            painter.setPen(QColor(FAINT))
-            painter.drawText(QRectF(rail_x - 56, y + 26, 50, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, end.strftime('%H:%M'))
-
-            category = card.get('category') or ''
-            if category:
-                painter.setFont(chip_font)
-                pending = category == '待确认'
-                if pending:
-                    bg, fg, chip_border = PENDING_BG, PENDING_INK, PENDING_BORDER
-                else:
-                    bg = category_color(category, self.colors)
-                    fg = contrasting_text(bg)
-                    chip_border = bg
-                pill = self._category_chip_rect(painter, index, category)
-                painter.setPen(QPen(QColor(chip_border), 1))
-                painter.setBrush(QColor(bg))
-                painter.drawRoundedRect(pill, 11, 11)
-                painter.setPen(QColor(fg))
-                painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, category[:16])
-
-            painter.setFont(dur_font)
-            painter.setPen(QColor(INK if active else MUTED))
-            dur = duration(card['end_ms'] - card['start_ms'])
-            body_right = right - 12 - (self._category_chip_rect(painter, index, category).width() + 8 if category else 0)
-            painter.drawText(QRectF(left + 12, y + 8, body_right - left - 12, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, dur)
-
-            painter.setFont(title_font)
-            painter.setPen(QColor(INK if active else MUTED))
-            title_w = int(body_right - left - 16)
-            title = painter.fontMetrics().elidedText(card['title'], Qt.TextElideMode.ElideRight, title_w)
-            painter.drawText(QRectF(left + 12, y + 32, title_w, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
-
-            painter.setFont(meta_font)
-            painter.setPen(QColor(MUTED if active else FAINT))
-            desc = painter.fontMetrics().elidedText(card['description'] or '', Qt.TextElideMode.ElideRight, title_w)
-            painter.drawText(QRectF(left + 12, y + 52, title_w, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, desc)
-
-            foot = bottom - 18
-            if card.get('project'):
-                painter.setPen(QColor(FAINT))
-                painter.drawText(QRectF(left + 12, foot, title_w, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, card['project'][:32])
-
-            if card.get('review'):
-                chip = self._chip_rect(index)
-                if chip:
-                    painter.setPen(QPen(QColor(PENDING_BORDER), 1))
-                    painter.setBrush(QColor(PENDING_BG))
-                    painter.drawRoundedRect(chip, 8, 8)
-                    painter.setPen(QColor(PENDING_INK))
-                    painter.drawText(chip.adjusted(-4, 0, -6, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, card['status'])
-            elif card.get('status') and active:
-                painter.setPen(QColor(FAINT))
-                painter.drawText(QRectF(right - 130, foot, 120, 16), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, card['status'])
-
-        if not self.cards:
-            painter.setPen(QColor(MUTED))
-            painter.setFont(QFont('Microsoft YaHei UI', 12))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, '今天还没有可展示的活动\n稍后再来，或切换日期查看历史')
-
-    def mouseMoveEvent(self, event):
-        index = self._index_at(event.position())
-        if index != self.hover_index:
-            self.hover_index = index
-            self.update()
-        if index is not None:
-            self.card_hovered.emit(self.cards[index]['rows'][0]['interval_id'])
-            chip = self._chip_rect(index)
-            if chip and chip.contains(event.position()):
-                self.setCursor(Qt.CursorShape.PointingHandCursor)
-            else:
-                self.setCursor(Qt.CursorShape.PointingHandCursor)
-        else:
-            self.card_hovered.emit('')
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-
-    def leaveEvent(self, _event):
-        self.hover_index = None
-        self.card_hovered.emit('')
-        self.setCursor(Qt.CursorShape.ArrowCursor)
-        self.update()
-
-    def mousePressEvent(self, event):
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-        index = self._index_at(event.position())
-        if index is None:
-            return
-        chip = self._chip_rect(index)
-        if chip and chip.contains(event.position()):
-            self.card_confirm.emit(self.cards[index])
-        else:
-            self.card_clicked.emit(self.cards[index])
+        return QSize(700, max(240, 12 + len(self.cards) * self.pitch))

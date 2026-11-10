@@ -35,7 +35,8 @@ def cards(rows):
         identity = ('task', row.get('task_id')) if meaningful and row.get('task_id') else (
             ('evidence', row.get('title'), row.get('app_id')) if active and row.get('title') else
             ('state', row['state']) if not active else ('single', row['interval_id']))
-        key = (row.get('session_id'), identity, row.get('manual'), row.get('disposition'), row.get('reliability'))
+        tag_key = tuple(sorted(t['id'] for t in row.get('tags', [])))
+        key = (row.get('session_id'), identity, row.get('manual'), row.get('disposition'), row.get('reliability'), row.get('category'), tag_key)
         if result and result[-1]['key'] == key and result[-1]['end_ms'] == row['start_ms']:
             card = result[-1]
             card['end_ms'] = row['end_ms']
@@ -56,12 +57,12 @@ def cards(rows):
         else:
             label = foreground_heading(row)
             if row.get('title'):
-                description = row.get('reason') or '前台窗口记录；可确认活动名称或等待整理。'
+                description = row.get('reason') or '前台窗口记录；可选择分类和标签，或等待整理。'
             else:
-                description = row.get('reason') or '记录中的窗口标题；可点开确认活动名称或等待 AI 整理。'
+                description = row.get('reason') or '可点开选择分类和标签，或等待 AI 整理。'
         result.append(dict(key=key, start_ms=row['start_ms'], end_ms=row['end_ms'], rows=[row],
             title=label, category=row.get('category') or ('待确认' if active else ''), project=row.get('project') or '',
-            description=description,
+            description=description, tags=row.get('tags', []),
             review=active and row.get('reliability') != 'supported' and row.get('disposition') != 'ignore',
             status='已确认' if row.get('manual') else 'AI 建议 · 待确认' if row.get('source') == 'ai' else '规则识别' if row.get('source') == 'rule' else '待确认' if active else ''))
     return result
@@ -94,6 +95,7 @@ def _active_signature(card):
         (row.get('process_name') or '').strip().casefold(),
         (card.get('category') or '').strip(),
         row.get('task_id') or '',
+        tuple(sorted(t['id'] for t in card.get('tags', []))),
     )
 
 

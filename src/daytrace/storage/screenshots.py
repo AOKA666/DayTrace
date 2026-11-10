@@ -105,6 +105,8 @@ def rollback(repo):
     """Call only while stopped; remove files before dropping their registry."""
     from .repository import InstanceLock
     with InstanceLock(repo.path):
+        if repo.db.execute('PRAGMA user_version').fetchone()[0] > 4:
+            raise ValueError('Roll back newer migrations before the screenshot schema.')
         if enabled(repo):
             with repo.transaction():
                 repo.db.execute('DELETE FROM screenshots')

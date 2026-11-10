@@ -11,6 +11,13 @@ from daytrace.personalization.provider import TextProvider, Vault, NoRedirect, D
 
 
 class ProviderTests(unittest.TestCase):
+    def test_removed_review_never_sends(self):
+        provider = self.provider()
+        provider.opener = Mock()
+        with self.assertRaises(ValueError):
+            provider.classify({'mode': 'review', 'records': []})
+        provider.opener.open.assert_not_called()
+
     def payload(self):
         return {'profile': {}, 'candidates': [{'id': 'task'}], 'evidence': [
             {'interval_id': 'interval', 'evidence_ids': ['event'], 'title': 'Synthetic activity', 'text': ''}]}
