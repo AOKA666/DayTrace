@@ -181,24 +181,28 @@ class DiaryMainWindow(QMainWindow):
         date_row = QHBoxLayout(date_capsule)
         date_row.setContentsMargins(0, 0, 0, 0)
         date_row.setSpacing(12)
-        prev = QPushButton()
-        prev.setIcon(icon('left', INK))
-        prev.setToolTip('上一天')
-        prev.setAccessibleName('上一天')
-        prev.setFixedSize(40, 38)
-        prev.clicked.connect(lambda: self.shift_day(-1))
+        def date_nav(name, tip, delta):
+            btn = QToolButton()
+            btn.setObjectName('dateNav')
+            btn.setIcon(icon(name, INK, 18))
+            btn.setIconSize(QSize(18, 18))
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            btn.setAutoRaise(False)
+            btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(tip)
+            btn.setAccessibleName(tip)
+            btn.setFixedSize(40, 40)
+            btn.clicked.connect(lambda: self.shift_day(delta))
+            return btn
+        prev = date_nav('left', '上一天', -1)
         self.date = QLineEdit(datetime.now().strftime('%Y-%m-%d'))
         self.date.setObjectName('dateField')
         self.date.setFixedSize(200, 40)
         self.date.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.date.addAction(icon('calendar'), QLineEdit.ActionPosition.LeadingPosition).triggered.connect(self.choose_date)
+        self.date.addAction(icon('calendar', MUTED, 16), QLineEdit.ActionPosition.LeadingPosition).triggered.connect(self.choose_date)
         self.date.returnPressed.connect(self.refresh)
-        nxt = QPushButton()
-        nxt.setIcon(icon('right', INK))
-        nxt.setToolTip('下一天')
-        nxt.setAccessibleName('下一天')
-        nxt.setFixedSize(40, 38)
-        nxt.clicked.connect(lambda: self.shift_day(1))
+        nxt = date_nav('right', '下一天', 1)
         date_row.addWidget(prev)
         date_row.addWidget(self.date)
         date_row.addWidget(nxt)
@@ -214,13 +218,14 @@ class DiaryMainWindow(QMainWindow):
         self.search.setPlaceholderText('筛选活动、分类、项目、标签')
         self.search.setObjectName('searchField')
         self.search.addAction(icon('search'), QLineEdit.ActionPosition.LeadingPosition)
-        self.search.setMinimumWidth(150)
-        self.search.setMaximumWidth(300)
+        self.search.setMinimumWidth(220)
+        self.search.setMaximumWidth(360)
         self.search.setMinimumHeight(40)
         self.search.textChanged.connect(self.filter_cards)
         tool.addWidget(self.search)
         self.pending_btn = QPushButton('待确认 0')
-        self.pending_btn.setObjectName('ghost')
+        self.pending_btn.setObjectName('pendingHint')
+        self.pending_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.pending_btn.clicked.connect(self.toggle_review)
         tool.addWidget(self.pending_btn)
         main.addLayout(tool)
@@ -447,10 +452,6 @@ class DiaryMainWindow(QMainWindow):
         self.dwell.setObjectName('settingsField')
         self.dwell.setMaximumWidth(88)
         privacy.addWidget(self.dwell)
-        t = QPushButton('保存采集与日记显示')
-        t.setObjectName('ghost')
-        t.clicked.connect(self.save_capture_preferences)
-        privacy.addWidget(t)
         self.capture_enabled = QCheckBox('开启本地截图证据')
         self.capture_enabled.toggled.connect(self.save_screenshots)
         privacy.addWidget(self.capture_enabled)
@@ -468,6 +469,12 @@ class DiaryMainWindow(QMainWindow):
         self.show_short_dwells = QCheckBox('显示短暂停留（默认关，仅看主要活动）')
         self.show_short_dwells.toggled.connect(self._save_show_short_dwells)
         privacy.addWidget(self.show_short_dwells)
+        save_capture = QPushButton('保存采集与日记显示')
+        save_capture.setObjectName('accent')
+        save_capture.setFixedWidth(200)
+        save_capture.clicked.connect(self.save_capture_preferences)
+        privacy.addSpacing(8)
+        privacy.addWidget(save_capture)
 
         advanced = self._settings_panel('模型与高级', '模型连接')
         adv = QLabel('密钥仅存于 Windows Credential Manager。')
@@ -558,11 +565,18 @@ class DiaryMainWindow(QMainWindow):
         self.summary_label.setVisible(hidden)
         self.summary_toggle.setText('展开' if not hidden else '收起')
 
+
+    def _set_pending_count(self, count, extra=''):
+        self.pending_btn.setText(f'待确认 {count}{extra}')
+        self.pending_btn.setProperty('hasPending', 'true' if count else 'false')
+        self.pending_btn.style().unpolish(self.pending_btn)
+        self.pending_btn.style().polish(self.pending_btn)
+
     def toggle_review(self):
         self.only_review = not self.only_review
         extra = ' · 仅看待确认' if self.only_review else ''
         count = sum(c['review'] for c in self.all_cards)
-        self.pending_btn.setText(f'待确认 {count}{extra}')
+        self._set_pending_count(count, extra)
         self.filter_cards()
 
     def run_job(self, fn, callback=None, quiet=False):
@@ -650,7 +664,7 @@ class DiaryMainWindow(QMainWindow):
                     self.all_cards = items
                     self.summary_label.setText(concise_overview(items))
                     count = sum(c['review'] for c in items)
-                    self.pending_btn.setText(f'待确认 {count}' + (' · 仅看待确认' if self.only_review else ''))
+                    self._set_pending_count(count, ' · 仅看待确认' if self.only_review else '')
                     self.filter_cards()
                 return
             raw, items, profile, self.tasks, self.rules, config, catalog = data
@@ -661,7 +675,7 @@ class DiaryMainWindow(QMainWindow):
             text = concise_overview(items)
             self.summary_label.setText(text)
             count = sum(c['review'] for c in items)
-            self.pending_btn.setText(f'待确认 {count}' + (' · 仅看待确认' if self.only_review else ''))
+            self._set_pending_count(count, ' · 仅看待确认' if self.only_review else '')
             self.filter_cards()
             if load_profile:
                 if not profile['activities']:
@@ -877,15 +891,12 @@ class DiaryMainWindow(QMainWindow):
             self.run_job(lambda m: m.forget(), lambda _: self.refresh())
 
     def set_key(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle('设置服务密钥')
-        lay = QVBoxLayout(dialog)
+        from .dialog_kit import add_field, add_footer, make_dialog
+        dialog, body, footer = make_dialog(self, '设置服务密钥', 460, '密钥仅写入 Windows Credential Manager，不会出现在日记数据里。')
         entry = QLineEdit()
         entry.setEchoMode(QLineEdit.EchoMode.Password)
-        lay.addWidget(QLabel('密钥仅写入 Windows Credential Manager'))
-        lay.addWidget(entry)
-        ok = QPushButton('保存密钥')
-        ok.setObjectName('accent')
+        entry.setPlaceholderText('粘贴服务密钥')
+        add_field(body, '服务密钥', entry)
         endpoint = self.endpoint.text().strip()
 
         def save():
@@ -894,8 +905,7 @@ class DiaryMainWindow(QMainWindow):
             dialog.accept()
             self.run_job(lambda m: Vault(endpoint).put(key))
 
-        ok.clicked.connect(save)
-        lay.addWidget(ok)
+        add_footer(footer, '保存密钥', dialog, accept_slot=save)
         dialog.exec()
 
     def delete_key(self):
@@ -1053,6 +1063,7 @@ def run_app(database: Path, preview_mode=False):
     app = QApplication.instance() or QApplication(sys.argv)
     from .theme import STYLESHEET
 
+    app.setStyle('Fusion')
     app.setStyleSheet(STYLESHEET)
     window = DiaryMainWindow(database, preview_mode=preview_mode)
     window.show()

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QColor, QIcon, QPixmap, QPainter
 from ..category_palette import PALETTE, default_tag_color
+from .dialog_kit import add_field, add_footer, field_label, make_dialog
 
 
 def color_square(color):
@@ -44,7 +45,10 @@ class ColorPicker(QWidget):
         button.setToolTip(name)
         button.setAccessibleName(name)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setStyleSheet(f'QPushButton {{background:{color}; color:white; border:2px solid transparent; border-radius:7px; padding:0;}} QPushButton:checked {{border-color:#243041;}}')
+        button.setStyleSheet(
+            f'QPushButton {{background:{color}; border:2px solid transparent; border-radius:15px; padding:0;}}'
+            'QPushButton:checked {border-color:#1D1D1F;}'
+        )
         button.clicked.connect(lambda: self.set_color(color))
         self.buttons[color] = button
         self.row.addWidget(button)
@@ -55,7 +59,6 @@ class ColorPicker(QWidget):
         self.color = color
         for value, button in self.buttons.items():
             button.setChecked(value == color)
-            button.setText('✓' if value == color else '')
             button.setVisible(not self.locked or value == color)
             button.setEnabled(not self.locked)
 
@@ -83,11 +86,7 @@ class TagCloud(QListWidget):
 
 
 def create_category(host, parent_id=None, on_created=None):
-    dialog = QDialog(host)
-    dialog.setWindowTitle('新建分类')
-    dialog.setMinimumWidth(400)
-    layout = QVBoxLayout(dialog)
-    form = QFormLayout()
+    dialog, body, footer = make_dialog(host, '新建分类', 460)
     parent = QComboBox()
     parent.addItem('一级分类', None)
     for item in host.taxonomy['categories']:
@@ -96,28 +95,25 @@ def create_category(host, parent_id=None, on_created=None):
     parent.setCurrentIndex(max(0, parent.findData(parent_id)))
     name = QLineEdit()
     name.setMaxLength(40)
-    form.addRow('上级分类', parent)
-    form.addRow('新分类名称', name)
+    name.setPlaceholderText('例如 工作、学习')
     colors = ColorPicker()
-    form.addRow('颜色', colors)
     note = QLabel()
-    form.addRow('', note)
+    note.setObjectName('caption')
+    note.setWordWrap(True)
+    add_field(body, '上级分类', parent)
+    add_field(body, '新分类名称', name)
+    add_field(body, '颜色', colors)
+    body.addWidget(note)
 
     def inherit_color():
         selected = next((c for c in host.taxonomy['categories'] if c['id'] == parent.currentData()), None)
         colors.inherit(selected['color'] if selected else None)
-        note.setText('子分类颜色与父分类保持一致。' if selected else '点击颜色块选择分类颜色。')
+        note.setText('子分类颜色与父分类保持一致。' if selected else '点击色块选择分类颜色。')
     parent.currentIndexChanged.connect(inherit_color)
     inherit_color()
-    layout.addLayout(form)
-    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-    buttons.button(QDialogButtonBox.StandardButton.Save).setText('创建')
-    buttons.button(QDialogButtonBox.StandardButton.Cancel).setText('取消')
-    buttons.button(QDialogButtonBox.StandardButton.Save).setEnabled(False)
-    name.textChanged.connect(lambda text: buttons.button(QDialogButtonBox.StandardButton.Save).setEnabled(bool(text.strip())))
-    buttons.accepted.connect(dialog.accept)
-    buttons.rejected.connect(dialog.reject)
-    layout.addWidget(buttons)
+    save, _cancel = add_footer(footer, '创建', dialog)
+    save.setEnabled(False)
+    name.textChanged.connect(lambda text: save.setEnabled(bool(text.strip())))
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return
     value, parent_value, color = name.text().strip(), parent.currentData(), colors.color
@@ -135,27 +131,16 @@ def create_category(host, parent_id=None, on_created=None):
 
 
 def create_tag(host, on_created=None):
-    dialog = QDialog(host)
-    dialog.setWindowTitle('新建标签')
-    dialog.setMinimumWidth(420)
-    layout = QVBoxLayout(dialog)
-    form = QFormLayout()
+    dialog, body, footer = make_dialog(host, '新建标签', 460)
     name = QLineEdit()
     name.setMaxLength(41)
     name.setPlaceholderText('例如 AI编程出海（可省略 #）')
     colors = ColorPicker()
-    form.addRow('标签名称', name)
-    form.addRow('颜色', colors)
-    layout.addLayout(form)
-    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-    save = buttons.button(QDialogButtonBox.StandardButton.Save)
-    save.setText('创建')
+    add_field(body, '标签名称', name)
+    add_field(body, '颜色', colors)
+    save, _cancel = add_footer(footer, '创建', dialog)
     save.setEnabled(False)
-    buttons.button(QDialogButtonBox.StandardButton.Cancel).setText('取消')
     name.textChanged.connect(lambda text: save.setEnabled(bool(text.lstrip('#').strip())))
-    buttons.accepted.connect(dialog.accept)
-    buttons.rejected.connect(dialog.reject)
-    layout.addWidget(buttons)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return
     value, color = name.text(), colors.color
@@ -174,33 +159,24 @@ def create_tag(host, on_created=None):
 
 
 def edit_category(host, category, on_saved=None):
-    dialog = QDialog(host)
-    dialog.setWindowTitle('修改分类')
-    dialog.setMinimumWidth(400)
-    layout = QVBoxLayout(dialog)
-    form = QFormLayout()
+    dialog, body, footer = make_dialog(host, '修改分类', 460)
     name = QLineEdit(category['name'])
     name.setMaxLength(40)
-    form.addRow('分类名称', name)
     colors = ColorPicker(category['color'])
-    form.addRow('颜色', colors)
     note = QLabel()
-    form.addRow('', note)
+    note.setObjectName('caption')
+    note.setWordWrap(True)
+    add_field(body, '分类名称', name)
+    add_field(body, '颜色', colors)
+    body.addWidget(note)
     if category.get('parent_id'):
         colors.inherit(category['color'])
         note.setText('子分类颜色与父分类保持一致，请在父分类中修改颜色。')
     else:
-        note.setText('点击颜色块选择分类颜色；修改后子分类会同步。')
-    layout.addLayout(form)
-    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-    buttons.button(QDialogButtonBox.StandardButton.Save).setText('保存')
-    buttons.button(QDialogButtonBox.StandardButton.Cancel).setText('取消')
-    save = buttons.button(QDialogButtonBox.StandardButton.Save)
+        note.setText('点击色块选择分类颜色；修改后子分类会同步。')
+    save, _cancel = add_footer(footer, '保存', dialog)
     save.setEnabled(bool(name.text().strip()))
     name.textChanged.connect(lambda value: save.setEnabled(bool(value.strip())))
-    buttons.accepted.connect(dialog.accept)
-    buttons.rejected.connect(dialog.reject)
-    layout.addWidget(buttons)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return
     value, color = name.text().strip(), colors.color
@@ -218,27 +194,16 @@ def edit_category(host, category, on_saved=None):
 
 
 def edit_tag(host, tag, on_saved=None):
-    dialog = QDialog(host)
-    dialog.setWindowTitle('修改标签')
-    dialog.setMinimumWidth(420)
-    layout = QVBoxLayout(dialog)
-    form = QFormLayout()
+    dialog, body, footer = make_dialog(host, '修改标签', 460)
     name = QLineEdit(tag['name'])
     name.setMaxLength(41)
     name.setPlaceholderText('例如 AI编程出海（可省略 #）')
     colors = ColorPicker(tag.get('color') or default_tag_color(tag['name']))
-    form.addRow('标签名称', name)
-    form.addRow('颜色', colors)
-    layout.addLayout(form)
-    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-    save = buttons.button(QDialogButtonBox.StandardButton.Save)
-    save.setText('保存')
+    add_field(body, '标签名称', name)
+    add_field(body, '颜色', colors)
+    save, _cancel = add_footer(footer, '保存', dialog)
     save.setEnabled(bool(name.text().lstrip('#').strip()))
-    buttons.button(QDialogButtonBox.StandardButton.Cancel).setText('取消')
     name.textChanged.connect(lambda value: save.setEnabled(bool(value.lstrip('#').strip())))
-    buttons.accepted.connect(dialog.accept)
-    buttons.rejected.connect(dialog.reject)
-    layout.addWidget(buttons)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return
     value, color = name.text(), colors.color
@@ -262,23 +227,30 @@ class ClassificationPicker(QWidget):
         self.host = host
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel('分类（必选）'))
+        layout.setSpacing(12)
+        layout.addWidget(field_label('分类（必选）'))
         row = QHBoxLayout()
+        row.setSpacing(10)
         self.category = QComboBox()
         self.category.setEditable(False)
         row.addWidget(self.category, 1)
         add = QPushButton('＋ 新建分类')
+        add.setObjectName('ghost')
+        add.setCursor(Qt.CursorShape.PointingHandCursor)
         add.clicked.connect(lambda: create_category(host, on_created=self.select_category))
         row.addWidget(add)
         layout.addLayout(row)
         row = QHBoxLayout()
-        row.addWidget(QLabel('标签（可选，可多选）'))
+        row.addWidget(field_label('标签（可选，可多选）'))
         row.addStretch()
         add_tag = QPushButton('＋ 新建标签')
+        add_tag.setObjectName('ghost')
+        add_tag.setCursor(Qt.CursorShape.PointingHandCursor)
         add_tag.clicked.connect(lambda: create_tag(host, self.select_tag))
         row.addWidget(add_tag)
         layout.addLayout(row)
         self.tags = QListWidget()
+        self.tags.setObjectName('tagPicker')
         self.tags.setMinimumHeight(130)
         self.tags.setMaximumHeight(200)
         layout.addWidget(self.tags)

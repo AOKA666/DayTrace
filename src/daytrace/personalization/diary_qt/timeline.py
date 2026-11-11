@@ -107,6 +107,7 @@ class TimeRail(QWidget):
     def __init__(self):
         super().__init__()
         self.setFixedWidth(84)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.active = True
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 9, 23, 0)
@@ -128,7 +129,7 @@ class TimeRail(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(BORDER), 1.5))
+        painter.setPen(QPen(QColor("#D2D2D7"), 1.5))
         painter.drawLine(77, 0, 77, self.height())
         painter.setPen(QPen(QColor(BG), 2))
         painter.setBrush(QColor(ACCENT if self.active else FAINT))
@@ -142,8 +143,9 @@ class TimelineRow(QWidget):
         self.card = None
         self.setFixedHeight(timeline.pitch)
         row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, CARD_GAP)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(20)
+        row.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.rail = TimeRail()
         self.frame = ActivityCard()
         row.addWidget(self.rail)

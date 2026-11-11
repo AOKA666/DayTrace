@@ -79,16 +79,9 @@ class TaxonomyUiTests(unittest.TestCase):
             memory.close()
 
     def test_unknown_pending_is_drawn_once_and_review_nav_removed(self):
-        from PySide6.QtGui import QPainter
-        drawn = []
-        class RecordingPainter(QPainter):
-            def drawText(self, *args):
-                if isinstance(args[-1], str):
-                    drawn.append(args[-1])
-                return super().drawText(*args)
-        with patch('daytrace.personalization.diary_qt.timeline.QPainter', RecordingPainter):
-            self.window.timeline.grab()
-        self.assertEqual(drawn.count('待确认'), 1)
+        pending = [row.frame.confirm for row in self.window.timeline._pool if row.card and row.frame.confirm.isVisible()]
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0].text(), '待确认')
         self.assertNotIn('AI 复盘', self.window.nav_buttons)
 
     def test_rules_dialog_toggles_and_deletes_with_plain_labels(self):
@@ -147,7 +140,8 @@ class TaxonomyUiTests(unittest.TestCase):
     def test_my_navigation_capture_badge_and_category_tree(self):
         self.assertNotIn('分类颜色', self.window.settings_tabs)
         self.window.navigate('我的', refresh=False)
-        self.assertIs(self.window.stack.currentWidget(), self.window.my_panel)
+        self.assertIs(self.window.stack.currentWidget(), self.window.my_page)
+        self.assertIs(self.window.my_page.currentWidget(), self.window.my_panel)
         self.assertFalse(self.window.date_capsule.isVisible())
         self.assertEqual(self.window.my_panel.tree.topLevelItem(0).child(0).text(0), '编程')
         self.assertEqual(self.window.my_panel.tags.item(0).text(), '#AI编程出海')

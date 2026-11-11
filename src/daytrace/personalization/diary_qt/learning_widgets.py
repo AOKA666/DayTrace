@@ -1,10 +1,12 @@
 """Plain-language local rule management and AI correction history."""
 from datetime import datetime
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
+
 
 
 def describe_conditions(conditions):
@@ -39,23 +41,36 @@ class RulesDialog(QDialog):
         super().__init__(host)
         self.host = host
         self.setWindowTitle('自动分类规则')
-        self.resize(840, 460)
+        self.setObjectName('appleDialog')
+        self.resize(840, 520)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(16)
+        heading = QLabel('自动分类规则')
+        heading.setObjectName('dialogTitle')
+        layout.addWidget(heading)
         hint = QLabel('规则用于在条件相同时自动沿用分类。例如：某个窗口标题再次出现时，归到你之前选择的分类。\n它与“纠正 AI 错误”是两回事。选中一条规则可启用、停用或删除。')
+        hint.setObjectName('caption')
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.empty = QLabel('还没有保存的规则。给活动确认分类后，可在这里管理标题匹配规则。')
+        self.empty.setObjectName('caption')
         self.empty.setWordWrap(True)
         layout.addWidget(self.empty)
         self.table = table(['匹配条件', '自动归到', '状态'])
         self.table.itemSelectionChanged.connect(self.selection_changed)
-        layout.addWidget(self.table)
+        layout.addWidget(self.table, 1)
         bar = QHBoxLayout()
+        bar.setSpacing(10)
         self.toggle = QPushButton('停用规则')
+        self.toggle.setObjectName('ghost')
         self.toggle.clicked.connect(self.toggle_rule)
         self.delete = QPushButton('删除规则')
+        self.delete.setObjectName('danger')
         self.delete.clicked.connect(self.delete_rule)
         close = QPushButton('关闭')
+        close.setObjectName('accent')
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
         close.clicked.connect(self.accept)
         bar.addWidget(self.toggle)
         bar.addWidget(self.delete)
@@ -120,13 +135,23 @@ class CorrectionsDialog(QDialog):
     def __init__(self, host, rows):
         super().__init__(host)
         self.setWindowTitle('AI 纠正记录')
-        self.resize(840, 440)
+        self.setObjectName('appleDialog')
+        self.resize(840, 520)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(16)
+        heading = QLabel('AI 纠正记录')
+        heading.setObjectName('dialogTitle')
+        layout.addWidget(heading)
         hint = QLabel('这里只记录：AI 已给出分类，你把它改成另一个分类。\n给未识别活动选择分类、确认 AI 原分类或添加标签，都不算 AI 纠正。')
+        hint.setObjectName('caption')
         hint.setWordWrap(True)
         layout.addWidget(hint)
         if not rows:
-            layout.addWidget(QLabel('目前没有可确认的 AI 纠正记录。旧记录未保存修改前的判断，不计入这里。'))
+            empty = QLabel('目前没有可确认的 AI 纠正记录。旧记录未保存修改前的判断，不计入这里。')
+            empty.setObjectName('caption')
+            empty.setWordWrap(True)
+            layout.addWidget(empty)
         self.table = table(['纠正时间', '活动', 'AI 原分类', '你改为'])
         for row in rows:
             index = self.table.rowCount()
@@ -135,7 +160,12 @@ class CorrectionsDialog(QDialog):
                       row['label'], row['previous_category'], row['category']]
             for column, value in enumerate(values):
                 self.table.setItem(index, column, QTableWidgetItem(value))
-        layout.addWidget(self.table)
+        layout.addWidget(self.table, 1)
+        bar = QHBoxLayout()
+        bar.addStretch()
         close = QPushButton('关闭')
+        close.setObjectName('accent')
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
         close.clicked.connect(self.accept)
-        layout.addWidget(close)
+        bar.addWidget(close)
+        layout.addLayout(bar)

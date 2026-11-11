@@ -6,8 +6,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication
 
-from daytrace.personalization.diary_qt.theme import SURFACE
-from daytrace.personalization.diary_qt.timeline import TimelineWidget
+from daytrace.personalization.diary_qt.theme import STYLESHEET, SURFACE
+from daytrace.personalization.diary_qt.timeline import ActivityCard, TimelineWidget
 
 
 def _card(title, category, index):
@@ -35,6 +35,7 @@ class TimelinePaintTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+        cls.app.setStyleSheet(STYLESHEET)
 
     def test_later_cards_keep_neutral_surface_instead_of_previous_chip_color(self):
         colors = {'事业 / AI编程': '#7566D9', '牛马': '#3C9B92'}
@@ -49,28 +50,23 @@ class TimelinePaintTests(unittest.TestCase):
             ],
             colors,
         )
+        widget._sync_rows()
+        self.app.processEvents()
+        cards = [row.frame for row in widget._pool[:4]]
+        self.assertEqual(len(cards), 4)
+
         image = QImage(widget.size(), QImage.Format.Format_ARGB32)
         image.fill(QColor('#FFFFFF'))
         widget.render(image)
 
-        left, _right, y0, bottom0 = widget._geom(0)
-        _l1, _r1, y1, bottom1 = widget._geom(1)
-        _l2, _r2, y2, bottom2 = widget._geom(2)
-        _l3, _r3, y3, bottom3 = widget._geom(3)
-        sample_x = left + 48
-        first = _rgb(image, sample_x, (y0 + bottom0) / 2)
-        second = _rgb(image, sample_x, (y1 + bottom1) / 2)
-        third = _rgb(image, sample_x, (y2 + bottom2) / 2)
-        fourth = _rgb(image, sample_x, (y3 + bottom3) / 2)
         surface = QColor(SURFACE)
         expected = (surface.red(), surface.green(), surface.blue())
-        self.assertEqual(first, expected)
-        self.assertEqual(second, expected)
-        self.assertEqual(third, expected)
-        self.assertEqual(fourth, expected)
-        self.assertNotEqual(second, QColor('#7566D9').getRgb()[:3])
-        self.assertNotEqual(third, QColor('#7566D9').getRgb()[:3])
-        self.assertNotEqual(fourth, QColor('#3C9B92').getRgb()[:3])
+        for card in cards:
+            point = card.mapTo(widget, card.rect().center())
+            sample = _rgb(image, point.x(), point.y())
+            self.assertEqual(sample, expected)
+            self.assertNotEqual(sample, QColor('#7566D9').getRgb()[:3])
+            self.assertNotEqual(sample, QColor('#3C9B92').getRgb()[:3])
 
 
 if __name__ == '__main__':

@@ -43,8 +43,21 @@ def pill_style(color):
 
 STYLESHEET = f'''
 QWidget {{ color:{INK}; font-family:{FONT_UI}; font-size:14px; background:transparent; }}
-QMainWindow, QDialog, QWidget#mainSurface {{ background:{BG}; }}
-QDialog {{ padding:12px; }}
+QMainWindow, QDialog, QWidget#mainSurface, QMessageBox {{ background:{BG}; }}
+QDialog, QDialog#appleDialog, QMessageBox {{ background:{BG}; }}
+QLabel#dialogTitle {{ font-size:22px; font-weight:600; letter-spacing:-0.2px; }}
+QLabel#dialogHeading {{ font-size:16px; font-weight:600; }}
+QDialogButtonBox {{ background:transparent; border:none; }}
+QDialogButtonBox QPushButton {{ min-width:84px; }}
+QMessageBox QLabel {{ color:{INK}; font-size:14px; }}
+QTextEdit#evidenceBody {{ background:{SIDEBAR}; border:1px solid {BORDER}; border-radius:12px; padding:12px; font-size:13px; color:{INK}; }}
+QListWidget#tagPicker {{ padding:8px; }}
+QListWidget#tagPicker::item {{ min-height:28px; padding:4px 8px; border-radius:8px; }}
+QListWidget#tagPicker::item:selected {{ background:{ACCENT_SOFT}; color:{INK}; }}
+QListWidget#tagPicker::indicator, QListWidget::indicator {{ width:16px; height:16px; border:1px solid #D2D5DD; border-radius:4px; background:white; }}
+QListWidget#tagPicker::indicator:checked, QListWidget::indicator:checked {{ background:{ACCENT}; border:3px solid #D9E5FF; }}
+QPushButton#danger {{ background:transparent; color:#C75050; border:1px solid {BORDER}; }}
+QPushButton#danger:hover {{ background:#FFF5F5; border-color:#E8C4C4; color:#B42318; }}
 QFrame#sidebar {{ background:{SIDEBAR}; border-right:1px solid {BORDER}; }}
 QLabel#brand {{ font-size:21px; font-weight:600; }}
 QLabel#brandLogo {{ background:{ACCENT}; border-radius:12px; }}
@@ -61,8 +74,9 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; border
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background:none; }}
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QListWidget, QTreeWidget, QTableWidget {{
  background:{SURFACE}; border:1px solid {BORDER}; border-radius:11px; padding:8px 12px;
- selection-background-color:{ACCENT_SOFT}; selection-color:{INK};
+ selection-background-color:{ACCENT_SOFT}; selection-color:{INK}; min-height:20px;
 }}
+QComboBox {{ padding:8px 28px 8px 12px; min-height:22px; }}
 QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{ border-color:#A8C1FA; }}
 QLineEdit:disabled {{ color:{MUTED}; background:{SIDEBAR}; }}
 QComboBox::drop-down {{ border:none; width:26px; }}
@@ -90,6 +104,11 @@ QFrame#settingsPanel, QFrame#summaryCard {{ background:{SURFACE}; border:1px sol
 QFrame#dateCapsule {{ background:transparent; border:none; }}
 QLineEdit#dateField {{ font-weight:500; padding-left:4px; }}
 QLineEdit#searchField {{ padding-left:4px; }}
+QToolButton#dateNav {{ background:{SURFACE}; border:1px solid {BORDER}; border-radius:11px; padding:0; }}
+QToolButton#dateNav:hover {{ background:#F8FAFF; border-color:#D8E2F5; }}
+QToolButton#dateNav::menu-indicator, QPushButton::menu-indicator {{ image:none; width:0; height:0; }}
+QPushButton#pendingHint {{ background:transparent; color:{MUTED}; border:none; padding:8px 4px; font-size:14px; }}
+QPushButton#pendingHint[hasPending="true"] {{ color:{PENDING_INK}; }}
 QLabel#captureBadge {{ border:none; border-radius:12px; padding:6px 16px; font-size:14px; font-weight:600; color:{MUTED}; background:{SIDEBAR}; }}
 QLabel#captureBadge[recordingState="running"] {{ background:#E5F5EC; color:#15803D; }}
 QLabel#captureBadge[recordingState="paused"] {{ background:{PENDING_BG}; color:{PENDING_INK}; }}

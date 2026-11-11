@@ -6,7 +6,6 @@ from datetime import datetime
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..diary_model import duration
+from .dialog_kit import add_footer
 from .taxonomy_widgets import ClassificationPicker
 
 
@@ -24,22 +24,32 @@ class ConfirmDialog(QDialog):
     def __init__(self, parent, title, category='', tags=()):
         super().__init__(parent)
         self.setWindowTitle('确认活动')
+        self.setObjectName('appleDialog')
         self.setMinimumWidth(560)
         layout = QVBoxLayout(self)
-        heading = QLabel(title)
-        heading.setWordWrap(True)
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(16)
+        heading = QLabel('确认活动')
+        heading.setObjectName('dialogTitle')
         layout.addWidget(heading)
+        name = QLabel(title)
+        name.setObjectName('dialogHeading')
+        name.setWordWrap(True)
+        layout.addWidget(name)
+        hint = QLabel('选择分类后即可确认。标签可选；以后遇到相同窗口标题时，会自动套用这次的分类和标签。')
+        hint.setObjectName('caption')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         self.picker = ClassificationPicker(parent, category, tags, self)
         layout.addWidget(self.picker)
-        buttons = QDialogButtonBox()
-        save = buttons.addButton('确认', QDialogButtonBox.ButtonRole.AcceptRole)
-        save.setObjectName('accent')
-        buttons.addButton('取消', QDialogButtonBox.ButtonRole.RejectRole)
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 6, 0, 0)
+        footer.setSpacing(10)
+        footer.addStretch()
+        save, _cancel = add_footer(footer, '确认', self)
+        layout.addLayout(footer)
         save.setEnabled(bool(self.picker.category.currentData()))
         self.picker.category.currentIndexChanged.connect(lambda: save.setEnabled(bool(self.picker.category.currentData())))
-        layout.addWidget(buttons)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
 
     def values(self):
         return self.picker.values()
@@ -53,11 +63,21 @@ class FragmentDialog(QDialog):
     def __init__(self, parent, card):
         super().__init__(parent)
         self.setWindowTitle(card['title'] + ' · 依据')
+        self.setObjectName('appleDialog')
+        self.setMinimumWidth(560)
         self.card = card
         self.selected_row = None
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(card['title']))
-        layout.addWidget(QLabel('选择片段查看、纠正，或确认整个活动。'))
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(16)
+        heading = QLabel(card['title'])
+        heading.setObjectName('dialogTitle')
+        heading.setWordWrap(True)
+        layout.addWidget(heading)
+        hint = QLabel('选择片段查看、纠正，或确认整个活动。')
+        hint.setObjectName('caption')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         self.list = QListWidget()
         for row in card['rows']:
             self.list.addItem(
@@ -65,13 +85,16 @@ class FragmentDialog(QDialog):
                 f"{duration(row['end_ms']-row['start_ms'])}  "
                 f"{row.get('process_name') or '未知'}  {(row.get('title') or '')[:48]}"
             )
-        layout.addWidget(self.list)
+        layout.addWidget(self.list, 1)
         row = QHBoxLayout()
+        row.setSpacing(10)
         view = QPushButton('查看选中片段')
         view.setObjectName('ghost')
+        view.setCursor(Qt.CursorShape.PointingHandCursor)
         view.clicked.connect(self._pick)
         confirm = QPushButton('确认整个活动')
         confirm.setObjectName('accent')
+        confirm.setCursor(Qt.CursorShape.PointingHandCursor)
         confirm.clicked.connect(self.accept)
         row.addWidget(view)
         row.addStretch()
@@ -93,11 +116,24 @@ class DetailDialog(QDialog):
         self.on_submit = on_submit
         label = row.get('label') or row.get('title') or '待确认'
         self.setWindowTitle(f'活动详情 · {label[:32]}')
-        self.setMinimumSize(720, 620)
+        self.setObjectName('appleDialog')
+        self.setMinimumSize(680, 620)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(row.get('reason') or '请先运行本地分析'))
-        layout.addWidget(QLabel(f"应用：{evidence['process_name']}  ·  事件：{evidence['event_id']}"))
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(16)
+        heading = QLabel(label)
+        heading.setObjectName('dialogTitle')
+        heading.setWordWrap(True)
+        layout.addWidget(heading)
+        meta = QLabel(
+            (row.get('reason') or '请先运行本地分析')
+            + f"\n应用：{evidence['process_name']}  ·  事件：{evidence['event_id']}"
+        )
+        meta.setObjectName('caption')
+        meta.setWordWrap(True)
+        layout.addWidget(meta)
         body = QTextEdit()
+        body.setObjectName('evidenceBody')
         body.setReadOnly(True)
         content_status = {
             'no_text': '应用未提供可读正文',
@@ -110,13 +146,13 @@ class DetailDialog(QDialog):
             f"标题：{evidence['title'] or '原始标题已过期 / 不可用'}\n"
             f"正文状态：{content_status}\n\n{evidence['text'] or '无可用正文，可根据自己的记忆纠正。'}\n\n{image_status}"
         )
-        layout.addWidget(body)
+        layout.addWidget(body, 1)
         self.picker = ClassificationPicker(parent, row.get('category') or '',
                                             [t['id'] for t in row.get('tags', [])], self)
         layout.addWidget(self.picker)
-        bar = QHBoxLayout()
+        secondary = QHBoxLayout()
+        secondary.setSpacing(10)
         for text, action in [
-            ('确认并保存', 'confirm'),
             ('不知道', 'unknown'),
             ('忽略', 'ignore'),
             ('私人活动', 'private'),
@@ -124,17 +160,29 @@ class DetailDialog(QDialog):
         ]:
             btn = QPushButton(text)
             btn.setObjectName('ghost')
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked=False, a=action: self._submit(a))
-            if action == 'confirm':
-                btn.setObjectName('accent')
-                btn.setEnabled(bool(self.picker.category.currentData()))
-                self.picker.category.currentIndexChanged.connect(lambda _index, button=btn: button.setEnabled(bool(self.picker.category.currentData())))
-            bar.addWidget(btn)
-        layout.addLayout(bar)
+            secondary.addWidget(btn)
+        secondary.addStretch()
+        layout.addLayout(secondary)
+        bar = QHBoxLayout()
+        bar.setSpacing(10)
         delete = QPushButton('删除此活动及关联记录')
-        delete.setObjectName('ghost')
+        delete.setObjectName('danger')
+        delete.setCursor(Qt.CursorShape.PointingHandCursor)
         delete.clicked.connect(self._delete)
-        layout.addWidget(delete, alignment=Qt.AlignmentFlag.AlignRight)
+        confirm = QPushButton('确认并保存')
+        confirm.setObjectName('accent')
+        confirm.setCursor(Qt.CursorShape.PointingHandCursor)
+        confirm.clicked.connect(lambda: self._submit('confirm'))
+        confirm.setEnabled(bool(self.picker.category.currentData()))
+        self.picker.category.currentIndexChanged.connect(
+            lambda _index, button=confirm: button.setEnabled(bool(self.picker.category.currentData()))
+        )
+        bar.addWidget(delete)
+        bar.addStretch()
+        bar.addWidget(confirm)
+        layout.addLayout(bar)
 
     def _submit(self, action):
         if action == 'confirm' and not self.picker.category.currentData():
