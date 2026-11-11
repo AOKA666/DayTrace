@@ -186,8 +186,11 @@ class Memory(TaxonomyMixin):
                 data['text'] = normalize(source['text'])
                 data['evidence_ids'].append(sample['id'])
         data['title'] = normalize(data['title'] or '')
-        # No URL adapter exists. Do not infer one from an arbitrary document string.
+        # Browser address evidence stays local; existing cloud payload scope is unchanged.
         data['url'] = ''
+        data['browser_pages'] = [dict(p) for p in self.db.execute(
+            'SELECT captured_ms,title,url,domain FROM browser_pages WHERE interval_id=? AND expires_ms>? ORDER BY captured_ms',
+            (interval_id,self.now()))]
         data['has_screenshot'] = False
         if self.db.execute('PRAGMA user_version').fetchone()[0]>=4:
             data['has_screenshot'] = bool(self.db.execute('SELECT 1 FROM screenshots WHERE event_id=? AND expires_ms>? LIMIT 1',(data['event_id'],self.now())).fetchone())
@@ -199,7 +202,7 @@ class Memory(TaxonomyMixin):
     def timeline(self, start_ms=None, end_ms=None):
         rows = [dict(r) for r in self.db.execute('''SELECT i.id AS interval_id,i.start_ms,i.end_ms,i.state,
           CASE WHEN i.state='active' AND i.start_ms>=? THEN i.title END AS title,i.app_id,
-          EXISTS(SELECT 1 FROM activity_events ge WHERE ge.session_id=i.session_id AND ge.at_ms=i.start_ms AND ge.kind='dwell_gap') AS short_gap,
+          (i.state='unknown' AND EXISTS(SELECT 1 FROM activity_events ge WHERE ge.session_id=i.session_id AND ge.at_ms=i.start_ms AND ge.kind='dwell_gap')) AS short_gap,
           i.process_name,s.timezone,s.device_id,s.platform,i.session_id,
           r.event_id,r.reliability,r.source,r.reason,r.manual,r.disposition,r.revision,r.task_id,
           t.label,t.category,t.project
@@ -212,6 +215,10 @@ class Memory(TaxonomyMixin):
             tags.setdefault(tag['interval_id'], []).append({'id': tag['id'], 'name': tag['name'], 'color': tag['color']})
         for row in rows:
             row['tags'] = tags.get(row['interval_id'], [])
+        domains = {r[0]: r[1] for r in self.db.execute(
+            'SELECT interval_id,domain FROM browser_pages WHERE expires_ms>? GROUP BY interval_id', (self.now(),))}
+        for row in rows:
+            row['browser_domain'] = domains.get(row['interval_id']) if row['state']=='active' else None
         return rows
 
     def feedback(self, interval_id, label='', category='', project='', action='confirm', remember=False):

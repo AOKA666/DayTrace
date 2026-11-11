@@ -28,6 +28,8 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
         repo = None
         engine = None
         collector = None
+        from .browser import BrowserProbe
+        browser = BrowserProbe(exclude or [], exclude_windows)
         try:
             repo = Repository(database)
             if permit and permit.get('retain'):
@@ -45,6 +47,7 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
             print(f"Database: {database.resolve()} | session: {engine.session}", flush=True)
             print("Use another terminal: pause / resume / stop. Ctrl+C stops. Idle means no input, not absence.", flush=True)
             print(f'Minimum page dwell: {dwell:g} seconds; shorter visits retain anonymous gap timing only.',flush=True)
+            print('BROWSER: local address-bar URLs; same-host dwell; query/fragment omitted; unavailable URLs fall back to title.',flush=True)
             next_poll = mono
             next_cleanup = mono + 3_600_000
             while not engine.stopped:
@@ -55,6 +58,7 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
                     print('SCREENSHOTS: disabled',flush=True)
                 commands = repo.db.execute("SELECT * FROM control_commands WHERE session_id=? AND acknowledged_ms IS NULL ORDER BY rowid", (engine.session,)).fetchall()
                 for command in commands:
+                    browser.close()
                     if collector:
                         collector.invalidate(clear=True)
                     if command["command"] == "pause":
@@ -119,6 +123,13 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
                             observation = source.snapshot(exclude or [], hwnd, read_title=idle < engine.idle_ms)
                     except OSError:
                         observation, idle = Observation("unknown"), 0
+                if idle >= engine.idle_ms:
+                    browser.close()
+                else:
+                    observation = browser.resolve(observation, mono)
+                    if observation is None:
+                        # UIA runs in its own killable process. Keep command/event loop responsive.
+                        continue
                 engine.sample(mono, wall, observation, idle, source="winevent" if kind != "poll" else "poll")
                 if collector:
                     collector.tick(mono,wall)
@@ -133,6 +144,7 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
             # OS lock releases; next start repairs the session at the last committed checkpoint.
             raise
         finally:
+            browser.close()
             if collector:
                 collector.close()
             source.close()

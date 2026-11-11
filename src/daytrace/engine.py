@@ -5,6 +5,14 @@ import os
 from .domain import Observation, STATES
 from .privacy import redact_title
 from .storage.repository import uid
+from .browser import same_site, safe_url, BROWSERS
+
+
+def clean_observation(observation):
+    address = safe_url(observation.url or '') if (observation.process_name or '').lower() in BROWSERS else None
+    return Observation('active', observation.process_name, observation.app_id,
+                       redact_title(observation.title or ''), observation.window,
+                       address[0] if address else None, address[1] if address else None)
 
 
 class Engine:
@@ -19,6 +27,7 @@ class Engine:
         self.idle_ms = idle_ms
         self.min_active_ms = min_active_ms
         self.pending = None
+        self.pending_pages = []
         self.current = None
         self.event_id = None
         self.interval_id = None
@@ -38,6 +47,10 @@ class Engine:
     def _transition(self, observation, at, wall, source, kind=None):
         if observation == self.current:
             return
+        if same_site(observation, self.current):
+            self._page(observation, at)
+            self.current = observation
+            return
         if self.interval_id:
             self.repo.db.execute("UPDATE activity_intervals SET end_ms=? WHERE id=?", (at, self.interval_id))
         if kind is None:
@@ -49,13 +62,22 @@ class Engine:
         self.interval_id = self.repo.interval(self.session, at, at, observation.state, observation.process_name, observation.app_id, observation.title)
         self.event_id = self.repo.event(self.session, at, wall, kind, observation.state, observation.process_name, observation.app_id, observation.title, source)
         self.current = observation
+        self._page(observation, at)
+
+    def _page(self, observation, at):
+        if observation.state == 'active' and observation.url:
+            self.repo.db.execute('INSERT INTO browser_pages VALUES (?,?,?,?,?,?,?,?)',
+                (uid(),self.interval_id,self.event_id,at,observation.title,observation.url,observation.domain,at+7*86400000))
 
     def _admit_pending(self):
         observation,mono,wall,source=self.pending
         start=self._time(mono) if mono>=self.last_mono else self.origin_wall+mono-self.origin_mono
         with self.repo.transaction():
             self._transition(observation,start,wall,source)
+            for page, page_mono in self.pending_pages:
+                self._transition(page,self.origin_wall+page_mono-self.origin_mono,wall,source)
         self.pending=None
+        self.pending_pages=[]
 
     def sample(self, mono_ms, wall_ms, observation, idle_for_ms=0, source="poll"):
         if not self.min_active_ms:
@@ -63,21 +85,32 @@ class Engine:
         if self.stopped or mono_ms<self.last_mono or idle_for_ms<0 or observation.state not in STATES:
             raise ValueError('Invalid observation or session state')
         if observation.state=='active':
-            observation=Observation('active',observation.process_name,observation.app_id,redact_title(observation.title or ''),observation.window)
+            observation=clean_observation(observation)
         blocked=self.paused or observation.state!='active' or idle_for_ms>=self.idle_ms
         # Never qualify a candidate across an unobserved stall or privacy boundary.
         if mono_ms-self.last_mono>5000 or idle_for_ms>=self.idle_ms or (blocked and source!='command'):
             self.pending=None
+            self.pending_pages=[]
         if self.pending and mono_ms-self.pending[1]>=self.min_active_ms:
             self._admit_pending()
         if blocked:
             self.pending=None
+            self.pending_pages=[]
             return self._sample(mono_ms,wall_ms,observation,idle_for_ms,source)
         if observation==self.current:
             self.pending=None
             return self._sample(mono_ms,wall_ms,observation,idle_for_ms,source)
-        if not self.pending or observation!=self.pending[0]:
+        if same_site(observation,self.current):
+            self.pending=None
+            self.pending_pages=[]
+            return self._sample(mono_ms,wall_ms,observation,idle_for_ms,source)
+        if self.pending and same_site(observation,self.pending[0]):
+            previous=self.pending_pages[-1][0] if self.pending_pages else self.pending[0]
+            if observation!=previous and len(self.pending_pages)<2048:
+                self.pending_pages.append((observation,mono_ms))
+        elif not self.pending or observation!=self.pending[0]:
             self.pending=(observation,mono_ms,wall_ms,source)
+            self.pending_pages=[]
         # Only anonymous timing is durable until this page reaches the threshold.
         return self._sample(mono_ms,wall_ms,Observation('unknown'),0,'dwell')
 
@@ -93,7 +126,7 @@ class Engine:
         elif observation.state != "active":
             observation = Observation(observation.state)
         else:
-            observation = Observation("active", observation.process_name, observation.app_id, redact_title(observation.title or ""), observation.window)
+            observation = clean_observation(observation)
         with self.repo.transaction():
             if abs((wall_ms - at) - self.last_wall_offset) > 2000:
                 self.repo.event(self.session, at, wall_ms, "clock_adjustment", "unknown", source="clock")

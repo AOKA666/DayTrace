@@ -12,6 +12,7 @@ ACCENT = '#2563EB'
 ACCENT_HOVER = '#1D4ED8'
 ACCENT_SOFT = '#EAF1FF'
 PENDING_BG = '#FFF4E9'
+PENDING_CARD_BG = '#FFF9F2'
 PENDING_INK = '#C76B20'
 PENDING_BORDER = PENDING_BG
 GAP_FILL = '#FAFAFC'
@@ -22,6 +23,9 @@ PAGE_MARGIN = 32
 CARD_RADIUS = 16
 CARD_HEIGHT = 112
 CARD_GAP = 12
+CARD_MARKER_WIDTH = 3
+CARD_MARKER_HEIGHT = 40
+CARD_MARKER_INSET = 8
 NAV_ITEMS = (('时间线', 'clock'), ('我的', 'sparkles'), ('设置', 'settings'))
 FONT_UI = '"Segoe UI", "Microsoft YaHei UI"'
 
@@ -113,7 +117,7 @@ QLabel#captureBadge {{ border:none; border-radius:12px; padding:6px 16px; font-s
 QLabel#captureBadge[recordingState="running"] {{ background:#E5F5EC; color:#15803D; }}
 QLabel#captureBadge[recordingState="paused"] {{ background:{PENDING_BG}; color:{PENDING_INK}; }}
 QFrame#activityCard {{ background:{SURFACE}; border:1px solid {BORDER}; border-radius:16px; }}
-QFrame#activityCard:hover {{ border-color:#D5DEEF; }}
+QFrame#activityCard[pending="true"] {{ background:{PENDING_CARD_BG}; border-color:transparent; }}
 QFrame#activityCard[gap="true"] {{ background:{GAP_FILL}; }}
 QLabel#activityTitle {{ font-size:16px; font-weight:600; }}
 QLabel#activityDuration {{ font-size:14px; font-weight:400; }}
@@ -121,7 +125,9 @@ QLabel#activityDescription {{ font-size:13px; color:{MUTED}; }}
 QLabel#activityFooter {{ font-size:12px; color:{FAINT}; }}
 QLabel#timeStart {{ font-size:15px; font-weight:600; }}
 QLabel#timeEnd {{ font-size:13px; color:{MUTED}; }}
-QPushButton#pendingChip {{ border:none; border-radius:12px; background:{PENDING_BG}; color:{PENDING_INK}; padding:4px 12px; font-size:13px; }}
+QPushButton#pendingChip {{ border:1px solid transparent; border-radius:8px; background:transparent; color:{INK}; padding:4px 6px; font-size:13px; }}
+QPushButton#pendingChip:hover {{ background:#FFF0DF; color:{PENDING_INK}; }}
+QPushButton#pendingChip:focus {{ border-color:#E8C6A1; }}
 QLabel#confirmedState {{ color:{MUTED}; font-size:13px; padding:4px 0; }}
 QPushButton#learningAction {{ text-align:left; padding:11px 16px; }}
 QCheckBox {{ spacing:9px; }}

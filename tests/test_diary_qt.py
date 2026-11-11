@@ -21,7 +21,8 @@ class DiaryQtTests(unittest.TestCase):
             if 'libEGL' in str(exc) or 'libxkbcommon' in str(exc):
                 self.skipTest('Qt platform libraries unavailable in this environment')
             raise
-        self.assertEqual(TimelineWidget.pitch, 104)
+        from daytrace.personalization.diary_qt.theme import CARD_HEIGHT, CARD_GAP
+        self.assertEqual(TimelineWidget.pitch, CARD_HEIGHT + CARD_GAP)
 
     def test_install_hint_module(self):
         from daytrace.personalization.diary_qt import INSTALL_HINT
@@ -79,6 +80,21 @@ class DiaryQtTests(unittest.TestCase):
                     offenders.append(f'{path.name}:{node.lineno}')
         self.assertEqual(offenders, [], f'bad relative imports: {offenders}')
 
+
+
+    def test_timeline_uses_show_short_dwells_preference(self):
+        text = (DIARY_QT / 'window.py').read_text(encoding='utf-8')
+        self.assertIn("show_short_dwells=show_short_dwells(self.database)", text)
+        self.assertNotIn('show_short_dwells=False,', text)
+        self.assertIn('显示所有短暂停留和位置时间', text)
+        self.assertIn('_save_show_short_dwells', text)
+
+    def test_close_event_always_accepts_after_stop_attempt(self):
+        text = (DIARY_QT / 'window.py').read_text(encoding='utf-8')
+        self.assertIn('def _stop_owned_collector', text)
+        self.assertIn('event.accept()', text)
+        self.assertNotIn('停止采集未成功', text)
+        self.assertNotIn('event.ignore()', text)
 
 if __name__ == '__main__':
     unittest.main()

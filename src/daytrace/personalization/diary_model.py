@@ -1,16 +1,18 @@
 """Read models for the diary. Source intervals are never rewritten or stretched."""
 from datetime import datetime
 
+from .display import tab_name
+
 DEFAULT_CATEGORIES = ['工作', '学习', '沟通', '娱乐', '生活', '其他']
 DEFAULT_MERGE_GAP_MS = 180_000
 DEFAULT_FOLD_GAP_MS = 120_000
 
 
 def foreground_heading(row) -> str:
-    """Use captured window identity when no task label exists yet."""
-    title = (row.get('title') or '').strip()
-    if title:
-        return title
+    """Use the page tab or window title; never show a domain as the record name."""
+    heading = tab_name(row.get('title'))
+    if heading:
+        return heading
     process = (row.get('process_name') or '').strip()
     if process:
         return process
@@ -23,6 +25,15 @@ def duration(ms):
         return f'{seconds} 秒'
     minutes = seconds // 60
     return f'{minutes // 60} 小时 {minutes % 60} 分钟' if minutes >= 60 else f'{minutes} 分钟'
+
+
+def card_duration_ms(card):
+    """Display actual source time, excluding interruptions inside a grouped card."""
+    rows = card.get('rows', [])
+    if rows and all('start_ms' in row and 'end_ms' in row for row in rows):
+        return sum(row['end_ms']-row['start_ms'] for row in rows
+                   if row['state']==rows[0]['state'])
+    return card['end_ms']-card['start_ms']
 
 
 def cards(rows):
@@ -76,7 +87,7 @@ def overview(items):
         row = card['rows'][0]
         if card['title'] == '待确认的活动' and not (row.get('title') or row.get('process_name')):
             continue
-        totals[card['title']] = totals.get(card['title'], 0) + card['end_ms'] - card['start_ms']
+        totals[card['title']] = totals.get(card['title'], 0) + card_duration_ms(card)
     top = sorted(totals.items(), key=lambda x: -x[1])[:3]
     pending = sum(c['review'] for c in items)
     text = '；'.join(f'{name}（{duration(ms)}）' for name, ms in top)
@@ -91,7 +102,7 @@ def _active_signature(card):
     row = card['rows'][0]
     return (
         card['title'].strip().casefold(),
-        (row.get('title') or '').strip().casefold(),
+        (row.get('browser_domain') or row.get('title') or '').strip().casefold(),
         (row.get('process_name') or '').strip().casefold(),
         (card.get('category') or '').strip(),
         row.get('task_id') or '',
@@ -233,8 +244,8 @@ def collapse_short_gap_rows(rows):
         if (
             merged
             and gapish
-            and merged[-1]['state'] != 'active'
-            and merged[-1]['state'] != 'excluded'
+            and merged[-1]['state'] == item['state']
+            and bool(merged[-1].get('short_gap')) == bool(item.get('short_gap'))
             and merged[-1]['end_ms'] == item['start_ms']
         ):
             merged[-1]['end_ms'] = item['end_ms']
@@ -248,26 +259,41 @@ def prepare_diary_rows(rows, dwell_ms):
     return collapse_short_gap_rows(project_dwell_threshold(rows, dwell_ms))
 
 
+HARD_BOUNDARY_STATES = ('idle', 'paused', 'excluded', 'locked', 'suspended')
+
+
 def _is_brief_dwell_card(card, dwell_ms):
     dwell_ms = max(0, int(dwell_ms))
+    state = card['rows'][0]['state']
+    if state in HARD_BOUNDARY_STATES:
+        return False
     span = card['end_ms'] - card['start_ms']
-    if dwell_ms and span < dwell_ms:
+    if state == 'active' and dwell_ms and span < dwell_ms:
         return True
-    if card.get('title') == '短暂停留' or _gap_has_short_dwell(card):
+    if state == 'unknown' or card.get('title') == '短暂停留' or _gap_has_short_dwell(card):
+        return True
+    if state != 'active' and dwell_ms and span < dwell_ms:
         return True
     return False
 
 
+def _is_foldable_gap(card, dwell_ms):
+    """Hidden non-activity that may be folded into the same surrounding activity."""
+    state = card['rows'][0]['state']
+    if state in HARD_BOUNDARY_STATES:
+        return False
+    if state == 'active':
+        return _is_brief_dwell_card(card, dwell_ms)
+    return True
+
+
 def _only_brief_between(items, start_ms, end_ms, dwell_ms):
-    """True when the open interval contains only brief-dwell / micro-gap cards."""
+    """True when the open interval has no other activity and no hard interruption."""
     for card in items:
         if card['end_ms'] <= start_ms or card['start_ms'] >= end_ms:
             continue
-        if _is_brief_dwell_card(card, dwell_ms):
-            continue
-        if _gap_card(card) and (card['end_ms'] - card['start_ms']) < dwell_ms:
-            continue
-        return False
+        if not _is_foldable_gap(card, dwell_ms):
+            return False
     return True
 
 
@@ -288,7 +314,9 @@ def merge_after_brief_filter(visible, all_items, dwell_ms, merge_gap_ms):
         if bridge < 0:
             merged.append(card)
             continue
-        if bridge <= merge_gap_ms or _only_brief_between(all_items, previous['end_ms'], card['start_ms'], dwell_ms):
+        # Same activity: fold hidden unknown / brief / unobserved holes.
+        # Hard boundaries and different activities still split the card.
+        if _only_brief_between(all_items, previous['end_ms'], card['start_ms'], dwell_ms):
             merged[-1] = _join_cards(previous, card)
             continue
         merged.append(card)
@@ -316,10 +344,11 @@ def build_display_cards(
     fold_gap_ms=DEFAULT_FOLD_GAP_MS,
     show_short_dwells=False,
 ):
-    """Presentation pipeline: dwell projection → cards → compaction → optional brief-dwell filter."""
-    items = compact_cards(cards(prepare_diary_rows(rows, dwell_ms)), merge_gap_ms, fold_gap_ms)
+    """Show only qualifying normal activities; hide every other interval."""
+    items = cards(prepare_diary_rows(rows, dwell_ms))
     visible = filter_short_dwell_cards(items, show_short_dwells, dwell_ms)
     if not show_short_dwells:
+        visible = [card for card in visible if card['rows'][0]['state'] == 'active']
         visible = merge_after_brief_filter(visible, items, dwell_ms, merge_gap_ms)
     return visible
 

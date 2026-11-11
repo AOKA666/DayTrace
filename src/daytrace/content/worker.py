@@ -75,6 +75,9 @@ def execute(connection,request):
         from .desktop import context,matches
         if not matches(request['context'],context(request['exclude'],request['exclude_windows'])):
             result={'source':request['source'],'status':'stale'}
+        elif request['source']=='browser':
+            from ..browser import extract
+            result=extract(request['context']['hwnd'])
         elif request['source']=='uia':
             from .uia import extract
             result=extract(request['context']['hwnd'])

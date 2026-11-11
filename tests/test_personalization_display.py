@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from daytrace.personalization.display import activity_label, group_rows
+from daytrace.personalization.display import activity_label, group_rows, tab_name
 
 
 def row(i, title='A', state='active', session='session'):
@@ -18,6 +18,8 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(activity_label(row(0, 'Example - Google Chrome')), 'Example')
         self.assertEqual(activity_label(row(0, None)), 'chrome.exe')
         self.assertEqual(activity_label(row(0, 'private', 'excluded')), '隐私排除')
+        self.assertEqual(tab_name('客服记录台 - Google Chrome'), '客服记录台')
+        self.assertEqual(tab_name('客服记录台'), '客服记录台')
 
     def test_a_b_a_groups_display_only_and_sums_actual_durations(self):
         rows = [row(0), row(1,'B'), row(2)]

@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 from ..classifier import Classifier
 from ..diary_model import DEFAULT_CATEGORIES, build_display_cards, cards, overview
 from ..diary_worker import tick
-from ...preferences import diary_display_ms, options, save_dwell, save_options, show_short_dwells, validate_dwell
+from ...preferences import diary_display_ms, options, save_options, show_short_dwells, validate_dwell
 from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
 from ..store import Memory, PersonalizationUpgradeBlocked
@@ -76,6 +76,8 @@ class DiaryMainWindow(QMainWindow):
         self.busy = False
         self._job_queue = []
         self.closed = False
+        self._capture_dirty = False
+        self._model_dirty = False
         self.recording = 'stopped'
         self.ai_future = None
         self.ai_cancel = None
@@ -466,15 +468,21 @@ class DiaryMainWindow(QMainWindow):
         self.fold_gap.setObjectName('settingsField')
         self.fold_gap.setMaximumWidth(88)
         privacy.addWidget(self.fold_gap)
-        self.show_short_dwells = QCheckBox('显示短暂停留（默认关，仅看主要活动）')
+        self.show_short_dwells = QCheckBox('显示所有短暂停留和位置时间（默认关，仅看主要活动）')
         self.show_short_dwells.toggled.connect(self._save_show_short_dwells)
         privacy.addWidget(self.show_short_dwells)
         save_capture = QPushButton('保存采集与日记显示')
         save_capture.setObjectName('accent')
         save_capture.setFixedWidth(200)
-        save_capture.clicked.connect(self.save_capture_preferences)
+        save_capture.clicked.connect(lambda: self.save_capture_preferences())
         privacy.addSpacing(8)
         privacy.addWidget(save_capture)
+        self.capture_save_note = QLabel('修改后请点击“保存采集与日记显示”；停留阈值在下次启动采集时生效。')
+        self.capture_save_note.setObjectName('caption')
+        self.capture_save_note.setWordWrap(True)
+        privacy.addWidget(self.capture_save_note)
+        for entry in (self.dwell,self.merge_gap,self.fold_gap):
+            entry.textEdited.connect(self._capture_edited)
 
         advanced = self._settings_panel('模型与高级', '模型连接')
         adv = QLabel('密钥仅存于 Windows Credential Manager。')
@@ -484,6 +492,11 @@ class DiaryMainWindow(QMainWindow):
         self.endpoint.setText(DEEPSEEK_ENDPOINT)
         self.model = self._settings_field(advanced, '模型名称')
         self.model.setText(DEEPSEEK_MODEL)
+        self.model_save_note = QLabel('修改模型后请点击“保存模型配置”。')
+        self.model_save_note.setObjectName('caption')
+        advanced.addWidget(self.model_save_note)
+        for entry in (self.endpoint,self.model):
+            entry.textEdited.connect(self._model_edited)
         for text, slot in [
             ('保存模型配置', self.save_model),
             ('设置密钥', self.set_key),
@@ -681,9 +694,11 @@ class DiaryMainWindow(QMainWindow):
                 if not profile['activities']:
                     profile = dict(profile, activities=list(DEFAULT_CATEGORIES))
                 self.fill_profile(profile)
-                self.dwell.setText(str(config.get('min_dwell_seconds', 5)))
-                self.merge_gap.setText(str(config.get('diary_merge_gap_seconds', 180)))
-                self.fold_gap.setText(str(config.get('diary_fold_gap_seconds', 120)))
+                config = options(self.database)
+                if not self._capture_dirty:
+                    self.dwell.setText(str(config.get('min_dwell_seconds', 5)))
+                    self.merge_gap.setText(str(config.get('diary_merge_gap_seconds', 180)))
+                    self.fold_gap.setText(str(config.get('diary_fold_gap_seconds', 120)))
                 for widget, key in (
                     (self.show_short_dwells, 'show_short_dwells'),
                     (self.capture_enabled, 'screenshots_enabled'),
@@ -692,9 +707,9 @@ class DiaryMainWindow(QMainWindow):
                     widget.blockSignals(True)
                     widget.setChecked(config.get(key) is True)
                     widget.blockSignals(False)
-                if config.get('ai_endpoint'):
+                if config.get('ai_endpoint') and not self._model_dirty:
                     self.endpoint.setText(config['ai_endpoint'])
-                if config.get('ai_model'):
+                if config.get('ai_model') and not self._model_dirty:
                     self.model.setText(config['ai_model'])
             self.set_catalog(catalog)
 
@@ -798,32 +813,44 @@ class DiaryMainWindow(QMainWindow):
             )
         self.run_job(lambda m: m.save_profile(dict(profile, activities=m.profile()['activities'])), lambda _: self.refresh())
 
+    def _capture_edited(self, text):
+        self._capture_dirty = True
+        self.capture_save_note.setText('尚未保存 · 请点击“保存采集与日记显示”')
+
+    def _model_edited(self, text):
+        self._model_dirty = True
+        self.model_save_note.setText('尚未保存 · 请点击“保存模型配置”')
+
     def _save_show_short_dwells(self, enabled):
         save_options(self.database, show_short_dwells=enabled)
         self.refresh(quiet=True)
 
-    def save_capture_preferences(self):
+    def save_capture_preferences(self, *, notify=True, refresh_view=True):
         try:
             dwell = validate_dwell(self.dwell.text())
-            merge = max(0, min(600, int(self.merge_gap.text().strip() or 180)))
-            fold = max(0, min(600, int(self.fold_gap.text().strip() or 120)))
+            merge = int(self.merge_gap.text().strip())
+            fold = int(self.fold_gap.text().strip())
+            if not 0 <= merge <= 600 or not 0 <= fold <= 600:
+                raise ValueError('Invalid display interval')
         except (TypeError, ValueError):
-            QMessageBox.critical(self, '采集与日记显示', '停留阈值须在 0–300 秒；合并/折叠间隔须为 0–600 的整数。')
-            return
+            self.capture_save_note.setText('未保存：停留阈值须在 0–300 秒；合并/折叠间隔须为 0–600 的整数。')
+            if notify:
+                QMessageBox.critical(self, '采集与日记显示', self.capture_save_note.text())
+            return False
 
-        save_dwell(self.database, dwell)
-        save_options(
-            self.database,
-            min_dwell_seconds=dwell,
-            diary_merge_gap_seconds=merge,
-            diary_fold_gap_seconds=fold,
-        )
-        self.refresh(load_profile=True)
-        QMessageBox.information(
-            self,
-            '已保存',
-            '偏好已写入；当前日期时间线已按新阈值重新展示。\n下次启动采集时，停留阈值同时作用于采集器。',
-        )
+        try:
+            save_options(self.database, min_dwell_seconds=dwell,
+                         diary_merge_gap_seconds=merge, diary_fold_gap_seconds=fold)
+        except OSError:
+            self.capture_save_note.setText('未保存：无法写入设置文件，请检查目录权限后重试。')
+            if notify:
+                QMessageBox.critical(self,'保存失败',self.capture_save_note.text())
+            return False
+        self._capture_dirty = False
+        self.capture_save_note.setText('已保存 · 停留阈值在下次启动采集时生效')
+        if refresh_view:
+            self.refresh()
+        return True
 
     def save_screenshots(self):
         save_options(self.database, screenshots_enabled=self.capture_enabled.isChecked())
@@ -835,10 +862,17 @@ class DiaryMainWindow(QMainWindow):
         except Exception:
             QMessageBox.critical(self, '模型配置', '请输入有效的 HTTPS 地址和模型名称。')
             return
+        try:
+            save_options(self.database, ai_endpoint=endpoint, ai_model=model, auto_ai=False)
+        except OSError:
+            self.model_save_note.setText('未保存：无法写入设置文件')
+            QMessageBox.critical(self,'保存失败',self.model_save_note.text())
+            return
         self.auto_ai.blockSignals(True)
         self.auto_ai.setChecked(False)
         self.auto_ai.blockSignals(False)
-        save_options(self.database, ai_endpoint=endpoint, ai_model=model, auto_ai=False)
+        self._model_dirty = False
+        self.model_save_note.setText('模型配置已保存')
         self.ai_note.setText('模型配置已保存，请重新开启后台分析。')
 
     def toggle_ai(self, enabled):
@@ -992,6 +1026,8 @@ class DiaryMainWindow(QMainWindow):
                     '采集未启动，常见原因是该数据库已被另一个 start 占用。\n\n' + detail,
                 )
                 self.collector_process = None
+            else:
+                self._drain_collector_pipes()
             self._sync_capture_state_blocking()
             return
 
@@ -1015,14 +1051,6 @@ class DiaryMainWindow(QMainWindow):
                     self.ai_note.setText(result['note'])
                 if result.get('cooldown'):
                     self.next_ai = time.monotonic() + result['cooldown']
-                if not hasattr(self, 'loaded_preferences') and result.get('options'):
-                    config = result['options']
-                    self.loaded_preferences = True
-                    self.auto_ai.setChecked(config.get('auto_ai') is True)
-                    if config.get('ai_endpoint'):
-                        self.endpoint.setText(config['ai_endpoint'])
-                    if config.get('ai_model'):
-                        self.model.setText(config['ai_model'])
             except Exception:
                 self.ai_note.setText('后台整理暂不可用，原始记录已保留。')
             self.ai_future = None
@@ -1039,20 +1067,52 @@ class DiaryMainWindow(QMainWindow):
 
             self.ai_future = self.ai_executor.submit(work)
 
+    def _drain_collector_pipes(self):
+        proc = self.collector_process
+        if not proc:
+            return
+        for stream in (proc.stdout, proc.stderr):
+            if stream:
+                threading.Thread(target=self._read_pipe, args=(stream,), daemon=True).start()
+
+    @staticmethod
+    def _read_pipe(stream):
+        try:
+            stream.read()
+        except Exception:
+            pass
+
+    def _stop_owned_collector(self) -> None:
+        """Stop the collector this window started. Failures must not block exit."""
+        proc = self.collector_process
+        if not proc or proc.poll() is not None:
+            self.collector_process = None
+            return
+        self._drain_collector_pipes()
+        try:
+            from ...cli import control
+
+            control(self.database, 'stop')
+        except Exception:
+            pass
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+        self.collector_process = None
+
     def closeEvent(self, event):
         self.closed = True
         self._capture_timer.stop()
         self._ai_timer.stop()
         self._timeline_timer.stop()
-        if self.collector_process and self.collector_process.poll() is None:
-            from ...cli import control
-
-            try:
-                control(self.database, 'stop')
-            except Exception:
-                QMessageBox.warning(self, '尚未退出', '停止采集未成功，请稍后重试退出。')
-                event.ignore()
-                return
+        self._stop_owned_collector()
         self.ai_executor.shutdown(wait=False, cancel_futures=True)
         self._capture_executor.shutdown(wait=False, cancel_futures=True)
         self.executor.shutdown(wait=False, cancel_futures=True)

@@ -52,7 +52,10 @@ def control(database, command):
 def records(database, table, limit, show_titles):
     db = readonly(database)
     try:
-        if table == "summary":
+        if table == 'browser':
+            rows = db.execute('SELECT * FROM browser_pages WHERE expires_ms>? ORDER BY captured_ms DESC LIMIT ?',
+                              (time.time_ns()//1_000_000,limit)).fetchall()
+        elif table == "summary":
             rows = db.execute("SELECT state, COUNT(*) AS intervals, ROUND(SUM(duration_ms)/1000.0,3) AS seconds FROM activity_intervals WHERE duration_ms>0 GROUP BY state ORDER BY state").fetchall()
         else:
             mapping = {"events": ("activity_events", "at_ms"), "intervals": ("activity_intervals", "start_ms"), "sessions": ("capture_sessions", "started_ms")}
@@ -168,7 +171,7 @@ def main(argv=None):
     for name in ("pause", "resume", "stop", "status", "doctor", "simulate", "prune"):
         sub.add_parser(name)
     show = sub.add_parser("records")
-    show.add_argument("--table", choices=("events", "intervals", "sessions", "summary"), default="intervals")
+    show.add_argument("--table", choices=("events", "intervals", "sessions", "summary", "browser"), default="intervals")
     show.add_argument("--limit", type=int, default=100)
     show.add_argument("--show-titles", action="store_true", help="Explicitly print saved titles (may contain private information)")
     delete = sub.add_parser("delete", help="Delete all local records only when collector has stopped")

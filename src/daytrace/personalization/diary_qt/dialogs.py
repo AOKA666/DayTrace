@@ -144,6 +144,10 @@ class DetailDialog(QDialog):
         image_status = '已保存许可区域截图，可在卡片上悬停预览。' if evidence['has_screenshot'] else '未保存有效截图，无法还原当时屏幕。'
         body.setPlainText(
             f"标题：{evidence['title'] or '原始标题已过期 / 不可用'}\n"
+            + ('浏览页面（本地脱敏网址）：\n' + '\n'.join(
+                f"{datetime.fromtimestamp(p['captured_ms']/1000):%H:%M:%S}  {p['title']}\n{p['url']}"
+                for p in evidence.get('browser_pages', [])) + '\n\n' if evidence.get('browser_pages') else '')
+            +
             f"正文状态：{content_status}\n\n{evidence['text'] or '无可用正文，可根据自己的记忆纠正。'}\n\n{image_status}"
         )
         layout.addWidget(body, 1)

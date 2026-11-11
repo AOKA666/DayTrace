@@ -9,6 +9,8 @@ class Observation:
     app_id: str | None = None
     title: str | None = None
     window: int = 0  # Transient only; never used as a durable application identity.
+    url: str | None = None
+    domain: str | None = None
 
     def anonymous(self, state: str):
         return Observation(state)

@@ -2,16 +2,18 @@
 from datetime import datetime
 from math import ceil
 
-from PySide6.QtCore import QEvent, QPointF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QSizePolicy, QSpacerItem, QVBoxLayout, QWidget,
 )
 from ..category_palette import category_color
-from ..diary_model import duration
-from .primitives import ElidedLabel
+from ..diary_model import duration, card_duration_ms
+from .primitives import ElidedLabel, activity_heading
 from .theme import ACCENT, BG, BORDER, CARD_GAP, CARD_HEIGHT, FAINT, pill_style
+from .theme import CARD_MARKER_WIDTH, CARD_MARKER_HEIGHT, CARD_MARKER_INSET
+from .icons import icon
 
 
 class ActivityCard(QFrame):
@@ -22,6 +24,7 @@ class ActivityCard(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName('activityCard')
+        self.marker_color = None
         self.setFixedHeight(CARD_HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -45,6 +48,8 @@ class ActivityCard(QFrame):
         self.status.setObjectName('confirmedState')
         self.confirm = QPushButton('待确认')
         self.confirm.setObjectName('pendingChip')
+        self.confirm.setIcon(icon('pending', '#D88A30', 16))
+        self.confirm.setIconSize(QSize(16,16))
         self.confirm.clicked.connect(self.confirmed)
         grid.addWidget(self.duration, 0, 0)
         grid.addWidget(self.category, 0, 1, alignment=Qt.AlignmentFlag.AlignRight)
@@ -58,11 +63,14 @@ class ActivityCard(QFrame):
 
     def bind(self, card, colors):
         active = card['rows'][0]['state'] == 'active'
+        pending = active and bool(card.get('review'))
         self.setProperty('gap', not active)
+        self.setProperty('pending', pending)
         self.style().unpolish(self)
         self.style().polish(self)
-        self.duration.setText(duration(card['end_ms'] - card['start_ms']))
-        self.title.setText(card['title'])
+        self.duration.setText(duration(card_duration_ms(card)))
+        self.title.setText(activity_heading(card))
+        self.title.setToolTip(card['title'])
         self.description.setText(card.get('description') or '')
         footer = []
         if card.get('project'):
@@ -71,16 +79,32 @@ class ActivityCard(QFrame):
         self.footer.setText('   '.join(footer))
         self.footer.setVisible(bool(footer))
         category = card.get('category') or ''
+        categorized = active and not pending and category and category != '待确认' and all(
+            row.get('manual') or (row.get('source') == 'rule' and row.get('reliability') == 'supported')
+            for row in card['rows'])
+        self.marker_color = QColor(category_color(category, colors)) if categorized else None
+        self.update()
         self.category.setVisible(bool(category and category != '待确认'))
         self.category.setText(self.category.fontMetrics().elidedText(category, Qt.TextElideMode.ElideRight, 190))
         self.category.setToolTip(category)
         self.category.setStyleSheet(pill_style(category_color(category, colors)))
-        pending = active and bool(card.get('review'))
         self.confirm.setVisible(pending)
         self.status.setVisible(not pending and bool(card.get('status')))
-        self.status.setText(card.get('status') or '')
+        status = card.get('status') or ''
+        self.status.setText('✓  ' + status if status == '已确认' else status)
         self.setToolTip(card['title'])
         self.setAccessibleName(card['title'])
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.marker_color is not None:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self.marker_color)
+            painter.drawRoundedRect(QRectF(CARD_MARKER_INSET,
+                (self.height()-CARD_MARKER_HEIGHT)/2, CARD_MARKER_WIDTH, CARD_MARKER_HEIGHT),
+                CARD_MARKER_WIDTH/2, CARD_MARKER_WIDTH/2)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

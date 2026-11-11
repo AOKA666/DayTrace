@@ -75,10 +75,31 @@ class DiaryModelTests(unittest.TestCase):
             )
         ]
         items = cards(rows)
-        self.assertEqual(items[0]['title'], 'DayTrace · README — Google Chrome')
+        self.assertEqual(items[0]['title'], 'DayTrace · README')
         self.assertEqual(items[0]['category'], '待确认')
         self.assertTrue(items[0]['review'])
         self.assertIn('前台窗口', items[0]['description'])
+
+    def test_browser_record_uses_tab_name_not_domain(self):
+        rows = [
+            _row(
+                interval_id='desk',
+                label='',
+                category='',
+                task_id=None,
+                title='客服记录台 - Google Chrome',
+                process_name='chrome.exe',
+                browser_domain='127.0.0.1',
+                reliability='tentative',
+                source='pending',
+                disposition='',
+                reason='',
+            )
+        ]
+        items = build_display_cards(rows, 5_000)
+        self.assertEqual(items[0]['title'], '客服记录台')
+        self.assertNotIn('127.0.0.1', items[0]['title'])
+        self.assertNotIn('浏览', items[0]['title'])
 
     def test_project_dwell_hides_short_active_segments(self):
         rows = [_row(start_ms=0, end_ms=3_000, title='弹窗', label='', task_id=None)]
@@ -132,7 +153,7 @@ class DiaryModelTests(unittest.TestCase):
         )
         self.assertEqual(visible[0]['title'], '短暂停留')
 
-    def test_filter_keeps_gaps_at_or_above_dwell(self):
+    def test_filter_hides_ordinary_unknown_even_above_dwell(self):
         rows = [
             _row(
                 interval_id='gap',
@@ -146,7 +167,8 @@ class DiaryModelTests(unittest.TestCase):
             )
         ]
         items = compact_cards(cards(rows))
-        self.assertEqual(len(filter_short_dwell_cards(items, False, 5_000)), 1)
+        self.assertEqual(len(filter_short_dwell_cards(items, False, 5_000)), 0)
+        self.assertEqual(build_display_cards(rows, 5_000), [])
 
     def test_named_and_titled_short_active_hidden_by_default(self):
         rows = [
@@ -203,33 +225,82 @@ class DiaryModelTests(unittest.TestCase):
         self.assertNotIn('通知', strict_titles)
 
     def test_merge_across_hidden_brief_gaps_same_chrome_title(self):
-        title = '华杉讲透《孙子兵法》 - 华杉 - 微信读书 - Google Chrome'
+        raw = '华杉讲透《孙子兵法》 - 华杉 - 微信读书 - Google Chrome'
+        title = '华杉讲透《孙子兵法》 - 华杉 - 微信读书'
         t0 = 20 * 3_600_000 + 46 * 60_000
         rows = [
-            _row(interval_id='r1', start_ms=t0, end_ms=t0 + 4 * 60_000, title=title, label='', task_id=None, process_name='chrome.exe'),
+            _row(interval_id='r1', start_ms=t0, end_ms=t0 + 4 * 60_000, title=raw, label='', task_id=None, process_name='chrome.exe'),
             _row(interval_id='b1', start_ms=t0 + 4 * 60_000, end_ms=t0 + 4 * 60_000 + 3_000, title='切换', label='', task_id=None, process_name='chrome.exe'),
-            _row(interval_id='r2', start_ms=t0 + 4 * 60_000 + 4 * 60_000, end_ms=t0 + 4 * 60_000 + 6 * 60_000, title=title, label='', task_id=None, process_name='chrome.exe'),
+            _row(interval_id='r2', start_ms=t0 + 4 * 60_000 + 4 * 60_000, end_ms=t0 + 4 * 60_000 + 6 * 60_000, title=raw, label='', task_id=None, process_name='chrome.exe'),
             _row(interval_id='b2', start_ms=t0 + 10 * 60_000, end_ms=t0 + 10 * 60_000 + 2_000, title='切换', label='', task_id=None, process_name='chrome.exe'),
-            _row(interval_id='r3', start_ms=t0 + 11 * 60_000, end_ms=t0 + 20 * 60_000, title=title, label='', task_id=None, process_name='chrome.exe'),
+            _row(interval_id='r3', start_ms=t0 + 11 * 60_000, end_ms=t0 + 20 * 60_000, title=raw, label='', task_id=None, process_name='chrome.exe'),
         ]
         merged = build_display_cards(rows, dwell_ms=5_000, merge_gap_ms=180_000, fold_gap_ms=120_000, show_short_dwells=False)
         chrome = [c for c in merged if title == c['title']]
+        from daytrace.personalization.diary_model import card_duration_ms
         self.assertEqual(len(chrome), 1)
         self.assertEqual(chrome[0]['start_ms'], rows[0]['start_ms'])
         self.assertEqual(chrome[0]['end_ms'], rows[-1]['end_ms'])
         self.assertEqual(len(chrome[0]['rows']), 3)
+        self.assertEqual(card_duration_ms(chrome[0]), (4 + 2 + 9) * 60_000)
 
     def test_merge_blocked_by_different_activity_between(self):
-        title = '华杉讲透《孙子兵法》 - 华杉 - 微信读书 - Google Chrome'
+        raw = '华杉讲透《孙子兵法》 - 华杉 - 微信读书 - Google Chrome'
+        title = '华杉讲透《孙子兵法》 - 华杉 - 微信读书'
         t0 = 20 * 3_600_000 + 46 * 60_000
         rows = [
-            _row(interval_id='r1', start_ms=t0, end_ms=t0 + 4 * 60_000, title=title, label='', task_id=None),
+            _row(interval_id='r1', start_ms=t0, end_ms=t0 + 4 * 60_000, title=raw, label='', task_id=None),
             _row(interval_id='grok', start_ms=t0 + 4 * 60_000, end_ms=t0 + 8 * 60_000, title='Grok Bot', label='', task_id=None, process_name='other.exe'),
-            _row(interval_id='r2', start_ms=t0 + 8 * 60_000, end_ms=t0 + 20 * 60_000, title=title, label='', task_id=None),
+            _row(interval_id='r2', start_ms=t0 + 8 * 60_000, end_ms=t0 + 20 * 60_000, title=raw, label='', task_id=None),
         ]
         merged = build_display_cards(rows, dwell_ms=5_000, show_short_dwells=False)
         chrome = [c for c in merged if title == c['title']]
         self.assertEqual(len(chrome), 2)
+
+    def test_filter_each_visit_before_merging_and_keep_hard_boundaries(self):
+        from daytrace.personalization.diary_model import card_duration_ms
+        def visit(identifier,start,end,title='A',state='active',**extra):
+            return _row(interval_id=identifier,start_ms=start,end_ms=end,title=title,state=state,
+                        label='',category='',task_id=None,**extra)
+        short=[visit('a',0,3000),visit('b',3000,4000,'B'),visit('c',4000,6000)]
+        self.assertEqual(build_display_cards(short,5000),[])
+        qualified=[visit('a',0,10000),visit('b',10000,12000,'B'),visit('c',12000,22000)]
+        result=build_display_cards(qualified,5000)
+        self.assertEqual(len(result),1)
+        self.assertEqual(card_duration_ms(result[0]),20000)
+        # Ordinary unknown folds into the same activity; duration excludes the gap.
+        qualified[1]=visit('b',10000,12000,'', 'unknown')
+        result=build_display_cards(qualified,5000)
+        self.assertEqual(len(result),1)
+        self.assertEqual(card_duration_ms(result[0]),20000)
+        # Real interruptions still keep the surrounding visits apart.
+        for state in ('idle','paused','excluded','locked','suspended'):
+            qualified[1]=visit('b',10000,12000,'',state)
+            result=build_display_cards(qualified,5000)
+            self.assertEqual(len([c for c in result if c['rows'][0]['state']=='active']),2)
+            self.assertEqual(len(result),2)
+
+    def test_default_diary_hides_all_nonactivity_regardless_of_duration(self):
+        for state in ('unknown','idle','paused','locked','suspended','excluded'):
+            for span in (3000,47000,80000):
+                rows=[_row(interval_id='gap',state=state,start_ms=0,end_ms=span,
+                           title=None,label=None,category='',project='',task_id=None)]
+                self.assertEqual(build_display_cards(rows,5000),[])
+
+    def test_ordinary_unknown_folds_into_same_activity_without_counting_time(self):
+        from daytrace.personalization.diary_model import card_duration_ms
+        rows = [
+            _row(interval_id='a', start_ms=0, end_ms=10_000, title='A', label='', category='', task_id=None),
+            _row(interval_id='gap', state='unknown', start_ms=10_000, end_ms=13_000,
+                 title=None, label=None, category='', project='', task_id=None),
+            _row(interval_id='c', start_ms=13_000, end_ms=23_000, title='A', label='', category='', task_id=None),
+        ]
+        result = build_display_cards(rows, 5_000)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['title'], 'A')
+        self.assertEqual(card_duration_ms(result[0]), 20_000)
+        self.assertTrue(all(r['state'] == 'active' for r in result[0]['rows']))
+
 
     def test_compact_merges_same_window_with_short_gap(self):
         rows = [

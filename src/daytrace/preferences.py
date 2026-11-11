@@ -3,7 +3,10 @@ import json
 import math
 import os
 import secrets
+import threading
 from pathlib import Path
+
+_WRITE_LOCK = threading.RLock()
 
 
 def validate_dwell(value):
@@ -77,6 +80,12 @@ def diary_gap_ms(database):
 
 
 def save_options(database, **changes):
+    # UI autosave and background taxonomy updates must not lose each other's keys.
+    with _WRITE_LOCK:
+        return _save_options(database, **changes)
+
+
+def _save_options(database, **changes):
     path = _preferences_path(database)
     path.parent.mkdir(parents=True, exist_ok=True)
     for attempt in range(2):

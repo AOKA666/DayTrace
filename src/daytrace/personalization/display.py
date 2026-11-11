@@ -1,5 +1,23 @@
 """Display-only grouping. Never changes source intervals or task assignments."""
 
+BROWSER_TITLE_SUFFIXES = (
+    ' - Google Chrome',
+    ' — Google Chrome',
+    ' - Microsoft Edge',
+    ' — Microsoft Edge',
+    ' - Mozilla Firefox',
+    ' — Mozilla Firefox',
+)
+
+
+def tab_name(title):
+    """Visible tab/window name; browser chrome suffixes are not part of the record."""
+    name = (title or '').strip()
+    for suffix in BROWSER_TITLE_SUFFIXES:
+        if name.endswith(suffix):
+            return name[:-len(suffix)].strip()
+    return name
+
 
 def activity_label(row):
     if row.get('label'):
@@ -9,12 +27,7 @@ def activity_label(row):
             return 'gap · 短暂停留'
         return {'excluded': '隐私排除', 'idle': '无输入空闲', 'paused': '已暂停',
                 'unknown': 'gap · 记录缺口', 'locked': '已锁屏'}.get(row['state'], row['state'])
-    title = row.get('title') or ''
-    for suffix in (' - Google Chrome', ' — Google Chrome', ' - Microsoft Edge'):
-        if title.endswith(suffix):
-            title = title[:-len(suffix)]
-            break
-    return title or row.get('process_name') or '标题不可用'
+    return tab_name(row.get('title')) or row.get('process_name') or '标题不可用'
 
 
 def group_rows(rows):

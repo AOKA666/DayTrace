@@ -76,6 +76,8 @@ class Repository:
             if not self.db.execute("SELECT 1 FROM devices").fetchone():
                 self.db.execute("INSERT INTO devices VALUES (?,?)", (uid(), "windows"))
         self.device_id = self.db.execute("SELECT id FROM devices").fetchone()[0]
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='browser_pages'").fetchone():
+            self.db.executescript((Path(__file__).parent / 'migrations/008_browser_extension.sql').read_text('utf-8'))
 
     @contextmanager
     def transaction(self):
@@ -150,6 +152,7 @@ class Repository:
     def cleanup(self, now):
         day = 86_400_000
         with self.transaction():
+            self.db.execute('DELETE FROM browser_pages WHERE expires_ms<=?', (now,))
             if self.db.execute('PRAGMA user_version').fetchone()[0] >= 4:
                 self.db.execute('DELETE FROM screenshots WHERE expires_ms<=?', (now,))
             self.db.execute("DELETE FROM content_samples WHERE expires_ms<=?", (now,))

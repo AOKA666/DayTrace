@@ -2,6 +2,23 @@
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QLabel, QSizePolicy
+import re
+
+
+def activity_heading(card):
+    """User-requested display name; leave source titles and task identities untouched."""
+    title = card['title']
+    rows = card.get('rows', [])
+    if not rows or any(row.get('manual') for row in rows):
+        return title
+    row = rows[0]
+    raw = row.get('title') or title
+    chrome = (row.get('process_name') or '').lower() == 'chrome.exe' or raw.endswith('Google Chrome')
+    trends = row.get('browser_domain') == 'trends.google.com' or bool(
+        re.search(r'(?:Google 趋势|谷歌趋势|Google Trends)\s*[-–—]\s*Google Chrome$', raw, re.IGNORECASE))
+    if chrome and trends:
+        return '搜索-谷歌趋势-Google Chrome'
+    return title
 
 
 class ElidedLabel(QLabel):

@@ -12,6 +12,8 @@
 
 ## 技术与模块边界
 
+- 2026-11-11 用户明确授权浏览器前台网址采集及同域名累计停留。仅读取未被排除的前台浏览器地址栏，不读取历史或后台标签；不开发扩展、不扩大云端发送范围。网址与页面标题按 7 天证据清理；修改该功能须运行 tests/test_browser.py 及原内容、Windows 边界、活动回归。
+
 - 应用目标环境为 Windows、Python 3.12 x64、VS Code、PowerShell。不要用当前系统默认版本代替目标环境而不说明。
 - domain、timeline 等业务代码与 Windows 适配器隔离；保留 schema_version、device_id、platform、session_id。
 - UI 线程不做 UIA、OCR、网络请求或长数据库事务。UIA/OCR 使用可终止隔离工作进程。

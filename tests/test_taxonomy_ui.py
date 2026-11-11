@@ -16,6 +16,84 @@ from daytrace.domain import Observation
 
 
 class TaxonomyUiTests(unittest.TestCase):
+    def test_close_does_not_save_capture_draft_and_model_save_persists(self):
+        from daytrace.preferences import options
+        self.window.model.setText('saved-model')
+        with patch('daytrace.personalization.diary_qt.window.TextProvider'):
+            self.window.save_model()
+        self.assertEqual(options(self.path)['ai_model'],'saved-model')
+        self.assertIn('已保存',self.window.model_save_note.text())
+        saved=options(self.path)
+        self.window.dwell.setText('9')
+        self.window.dwell.textEdited.emit('9')
+        self.window.close()
+        self.assertEqual(options(self.path),saved)
+
+    def test_capture_requires_save_button_and_survives_reopen(self):
+        from daytrace.preferences import options
+        saved=options(self.path)
+        self.window.dwell.setText('5')
+        self.window.dwell.textEdited.emit('5')
+        self.window.dwell.editingFinished.emit()
+        self.assertEqual(options(self.path),saved)
+        self.assertIn('尚未保存',self.window.capture_save_note.text())
+        next(b for b in self.window.findChildren(QPushButton) if b.text()=='保存采集与日记显示').click()
+        self.wait_jobs()
+        self.assertEqual(options(self.path)['min_dwell_seconds'],5)
+        self.assertIn('已保存',self.window.capture_save_note.text())
+        old=self.window
+        old.close();old.deleteLater();self.app.processEvents()
+        self.app,self.window=run_app(self.path,preview_mode=True)
+        self.wait_jobs()
+        self.assertEqual(float(self.window.dwell.text()),5)
+
+    def test_capture_save_preserves_other_drafts_and_reports_failure(self):
+        from daytrace.preferences import options
+        self.window.model.setText('draft-model')
+        self.window.model.textEdited.emit('draft-model')
+        self.window.description.setPlainText('unsaved profile draft')
+        self.window.dwell.setText('7')
+        self.assertTrue(self.window.save_capture_preferences(notify=False))
+        self.wait_jobs()
+        self.assertEqual(self.window.model.text(),'draft-model')
+        self.assertEqual(self.window.description.toPlainText(),'unsaved profile draft')
+        self.window.dwell.setText('8')
+        with patch('daytrace.personalization.diary_qt.window.save_options',side_effect=OSError):
+            self.assertFalse(self.window.save_capture_preferences(notify=False))
+        self.assertIn('未保存',self.window.capture_save_note.text())
+        self.assertEqual(options(self.path)['min_dwell_seconds'],7)
+
+    def test_invalid_capture_edit_keeps_last_saved_value(self):
+        from daytrace.preferences import options
+        self.window.dwell.setText('5')
+        self.window.save_capture_preferences(notify=False)
+        self.wait_jobs()
+        self.window.dwell.setText('')
+        self.window.dwell.textEdited.emit('')
+        self.window.dwell.editingFinished.emit()
+        self.assertFalse(self.window.save_capture_preferences(notify=False))
+        self.assertIn('未保存',self.window.capture_save_note.text())
+        self.assertEqual(options(self.path)['min_dwell_seconds'],5)
+        self.window.dwell.setText('5')
+        self.window.save_capture_preferences(notify=False)
+        self.wait_jobs()
+
+    def test_late_ai_tick_cannot_overwrite_model_draft(self):
+        from concurrent.futures import Future
+        self.window.model.setText('draft-model')
+        future=Future()
+        future.set_result({'options':{'ai_model':'stale-model','auto_ai':True}})
+        self.window.ai_future=future
+        self.window.preview_mode=False
+        self.window.busy=True
+        try:
+            self.window._run_ai_tick()
+            self.assertEqual(self.window.model.text(),'draft-model')
+            self.assertFalse(self.window.auto_ai.isChecked())
+        finally:
+            self.window.preview_mode=True
+            self.window.busy=False
+
     def test_unified_timeline_history_and_return_today(self):
         from datetime import datetime, timedelta
         self.assertEqual(list(self.window.nav_buttons), ['时间线', '我的', '设置'])
@@ -278,6 +356,52 @@ class TaxonomyUiTests(unittest.TestCase):
         self.assertEqual(updated_tag['name'], 'AI出海')
         self.assertEqual(updated_tag['color'], '#CA7298')
         self.assertEqual(self.window.my_panel.tags.item(0).text(), '#AI出海')
+
+
+    def test_show_hidden_intervals_checkbox_saves_and_refreshes(self):
+        from daytrace.preferences import options, show_short_dwells
+        box = self.window.show_short_dwells
+        self.assertFalse(box.isChecked())
+        self.assertIn('短暂停留', box.text())
+        self.assertIn('位置时间', box.text())
+        with patch.object(self.window, 'refresh') as refresh:
+            box.setChecked(True)
+            refresh.assert_called()
+        self.assertTrue(options(self.path)['show_short_dwells'])
+        self.assertTrue(show_short_dwells(self.path))
+
+    def test_close_succeeds_when_collector_stop_fails(self):
+        class FakeProc:
+            def __init__(self):
+                self._alive = True
+                self.stdout = None
+                self.stderr = None
+
+            def poll(self):
+                return None if self._alive else 0
+
+            def terminate(self):
+                self._alive = False
+
+            def kill(self):
+                self._alive = False
+
+            def wait(self, timeout=None):
+                self._alive = False
+                return 0
+
+        proc = FakeProc()
+        self.window.collector_process = proc
+        self.window.preview_mode = False
+        with patch('daytrace.cli.control', side_effect=RuntimeError('Command not acknowledged')) as stop:
+            with patch('daytrace.personalization.diary_qt.window.QMessageBox.warning') as warn:
+                self.window.close()
+                stop.assert_called_once()
+                warn.assert_not_called()
+        self.assertTrue(self.window.closed)
+        self.assertIsNone(self.window.collector_process)
+        self.assertIsNotNone(proc.poll())
+        self.window.preview_mode = True
 
     def test_run_job_queues_instead_of_dropping(self):
         order = []
