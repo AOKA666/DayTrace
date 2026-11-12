@@ -64,6 +64,41 @@ class LearningTests(unittest.TestCase):
         Classifier(self.memory).analyze()
         self.assertEqual(self.memory.timeline()[0]['source'], 'human')
 
+    def test_confirmation_preserves_unrelated_rules_and_ai_results(self):
+        category = self.memory.create_category('学习')
+        with self.memory.repo.transaction():
+            task = self.memory.task('娱乐', '生活', '')
+        self.memory.save_rule(task, {'title_exact': 'Comedy movie entertainment unrelated'}, True)
+        self.classifier.analyze()
+        with self.memory.repo.transaction():
+            self.memory.db.execute("UPDATE task_results SET source='ai',task_id=? WHERE interval_id=?", (task, self.ids[3]))
+        def results():
+            return {r['interval_id']: dict(r) for r in self.memory.db.execute('SELECT * FROM task_results')}
+        before = results()
+        generation = self.memory.generation()
+        self.memory.confirm_selection([self.ids[0]], category)
+        after = results()
+        for index in (1, 3):
+            self.assertEqual(after[self.ids[index]], before[self.ids[index]])
+        self.assertEqual(after[self.ids[0]]['manual'], 1)
+        self.assertEqual(after[self.ids[2]]['source'], 'rule')
+        self.assertGreater(self.memory.generation(), generation)
+        self.memory.create_category('新增分类')
+        self.assertEqual(results(), after)
+
+    def test_removed_confirmation_rule_only_requeues_dependents(self):
+        category = self.memory.create_category('学习')
+        self.classifier.analyze()
+        self.memory.confirm_selection([self.ids[0]], category)
+        prior = dict(self.memory.db.execute('SELECT * FROM task_results WHERE interval_id=?', (self.ids[1],)).fetchone())
+        self.memory.feedback(self.ids[0], action='undo')
+        dependent = self.memory.db.execute('SELECT * FROM task_results WHERE interval_id=?', (self.ids[2],)).fetchone()
+        self.assertEqual(dependent['source'], 'pending')
+        self.assertIsNotNone(dependent['task_id'])
+        self.assertEqual(dict(self.memory.db.execute('SELECT * FROM task_results WHERE interval_id=?', (self.ids[1],)).fetchone()), prior)
+        self.classifier.analyze([self.ids[2]])
+        self.assertIsNone(self.memory.db.execute('SELECT task_id FROM task_results WHERE interval_id=?', (self.ids[2],)).fetchone()[0])
+
     def test_rules_conflicts_disable_delete_and_negative_scope(self):
         with self.memory.repo.transaction():
             task = self.memory.task('学习 API', '学习', 'DayTrace')

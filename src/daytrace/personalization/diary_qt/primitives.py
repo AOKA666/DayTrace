@@ -18,6 +18,8 @@ def activity_heading(card):
         re.search(r'(?:Google 趋势|谷歌趋势|Google Trends)\s*[-–—]\s*Google Chrome$', raw, re.IGNORECASE))
     if chrome and trends:
         return '搜索-谷歌趋势-Google Chrome'
+    if row.get('browser_domain') and row.get('title'):
+        return row['title']
     return title
 
 

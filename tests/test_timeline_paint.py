@@ -37,6 +37,24 @@ class TimelinePaintTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
         cls.app.setStyleSheet(STYLESHEET)
 
+    def test_browser_title_domain_and_manual_name_survive_rebinding(self):
+        card = _card('浏览 · example.com', '待确认', 0)
+        card['rows'][0].update(title='Example page - Google Chrome',
+                              browser_domain='example.com', process_name='chrome.exe')
+        widget = ActivityCard()
+        widget.bind(card, {})
+        self.assertEqual(widget.title.text(), 'Example page - Google Chrome')
+        self.assertEqual(widget.footer.text(), 'example.com')
+        card['title'] = 'My research'
+        card['rows'][0]['manual'] = 1
+        widget.bind(card, {})
+        self.assertEqual(widget.title.text(), 'My research')
+        self.assertIn('Example page - Google Chrome', widget.footer.text())
+        self.assertIn('example.com', widget.footer.text())
+        widget.bind(_card('Editor', '工作', 1), {})
+        self.assertEqual(widget.footer.text(), '')
+        widget.close()
+
     def test_pending_fill_and_recycled_confirmed_card(self):
         card = _card('Synthetic', '工作', 0)
         widget = ActivityCard()

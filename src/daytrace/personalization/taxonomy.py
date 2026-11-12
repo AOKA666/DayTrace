@@ -73,7 +73,7 @@ class TaxonomyMixin:
             colors[row['path']] = row['color']
         save_options(self.repo.path, category_colors=colors)
 
-    def _sync_category_profile(self, drop_paths=()):
+    def _sync_category_profile(self, drop_paths=(), invalidate=True):
         catalog = self.catalog()['categories']
         profile = self.profile()
         profile['activities'] = [r['path'] for r in catalog]
@@ -82,7 +82,10 @@ class TaxonomyMixin:
         self.db.execute('INSERT INTO personal_profile VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
                         (json.dumps(profile, ensure_ascii=False),))
         self._sync_category_colors(catalog, drop_paths)
-        self.invalidate_automatic()
+        if invalidate:
+            self.invalidate_automatic()
+        else:
+            self.db.execute('UPDATE personal_state SET generation=generation+1 WHERE id=1')
 
     def create_category(self, name, parent_id=None, color=PALETTE[0]):
         name = self._taxonomy_name(name)
@@ -105,7 +108,7 @@ class TaxonomyMixin:
                 self.db.execute('UPDATE personal_categories SET active=1,color=? WHERE id=?', (color, identifier))
             else:
                 self.db.execute('INSERT INTO personal_categories VALUES (?,?,?,?,1)', (identifier, name, parent_id, color))
-            self._sync_category_profile()
+            self._sync_category_profile(invalidate=False)
         return identifier
 
     def update_category(self, identifier, name, color):

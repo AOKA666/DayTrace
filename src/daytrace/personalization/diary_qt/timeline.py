@@ -73,6 +73,12 @@ class ActivityCard(QFrame):
         self.title.setToolTip(card['title'])
         self.description.setText(card.get('description') or '')
         footer = []
+        row = card['rows'][0]
+        domain = row.get('browser_domain') if active else None
+        if domain:
+            if any(item.get('manual') for item in card['rows']) and row.get('title'):
+                footer.append(row['title'])
+            footer.append(domain)
         if card.get('project'):
             footer.append('项目 · ' + card['project'])
         footer.extend('#' + t['name'] for t in card.get('tags', []))

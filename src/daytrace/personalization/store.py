@@ -249,6 +249,15 @@ class Memory(TaxonomyMixin):
             result = self.db.execute('SELECT * FROM task_results WHERE interval_id=?', (interval_id,)).fetchone()
             if not result:
                 raise ValueError('Analyze this interval first')
+            # Compare local dependencies, not every historical classification.
+            from .classifier import Classifier
+            classifier = Classifier(self)
+            before = {}
+            if action != 'private':
+                for row in self.db.execute('SELECT interval_id FROM task_results WHERE manual=0').fetchall():
+                    evidence = self.evidence(row[0])
+                    if evidence:
+                        before[row[0]] = (evidence, classifier.predict(evidence))
             self.db.execute('DELETE FROM activity_tags WHERE interval_id=?', (interval_id,))
             self.db.execute('DELETE FROM learned_rules WHERE id IN (SELECT rule_id FROM rule_origins WHERE interval_id=?)', (interval_id,))
             self.db.execute('DELETE FROM activity_cases WHERE interval_id=?', (interval_id,))
@@ -267,7 +276,11 @@ class Memory(TaxonomyMixin):
                  'confirmed' if task else ('review' if action in ('undo', 'unknown') else action), interval_id))
             if task and remember:
                 self.db.execute('INSERT INTO activity_cases VALUES (?,?)', (interval_id, task))
-            self.invalidate_automatic()
+            # Reject old in-flight AI responses even when no other result changes.
+            self.db.execute('UPDATE personal_state SET generation=generation+1 WHERE id=1')
+            for identifier, (evidence, prediction) in before.items():
+                if identifier != interval_id and classifier.predict(evidence) != prediction:
+                    self.db.execute("UPDATE task_results SET source='pending',revision=revision+1 WHERE interval_id=? AND manual=0", (identifier,))
 
     def _private(self, interval, event):
         # Erase rather than retaining a revision containing the former label/evidence.
