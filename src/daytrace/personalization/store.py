@@ -311,7 +311,7 @@ class Memory(TaxonomyMixin):
             self.repo.cleanup(self.now())
 
     def save_rule(self, task, conditions, approved=False, rule_id=None, origins=()):
-        allowed = {'app', 'title', 'title_exact', 'keywords', 'exclude', 'project', 'context', 'url_prefix'}
+        allowed = {'app', 'title', 'title_exact', 'domain', 'keywords', 'exclude', 'project', 'context', 'url_prefix'}
         if not isinstance(conditions, dict) or set(conditions) - allowed:
             raise ValueError('Invalid rule fields')
         cleaned = {}
@@ -324,7 +324,7 @@ class Memory(TaxonomyMixin):
                 cleaned[key] = normalize(value)[:200]
             else:
                 raise ValueError('Invalid rule condition')
-        if not any(cleaned.get(k) for k in ('title', 'title_exact', 'keywords', 'project', 'context', 'url_prefix')):
+        if not any(cleaned.get(k) for k in ('title', 'title_exact', 'domain', 'keywords', 'project', 'context', 'url_prefix')):
             raise ValueError('An application alone cannot define a task')
         identifier = rule_id or uid()
         with self.repo.transaction():

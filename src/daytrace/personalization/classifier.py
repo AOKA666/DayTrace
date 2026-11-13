@@ -15,6 +15,8 @@ def text_of(evidence):
 
 def matches(conditions, evidence):
     text = text_of(evidence)
+    if conditions.get('domain') and {p['domain'].casefold() for p in evidence.get('browser_pages', [])} != {conditions['domain'].casefold()}:
+        return False
     if conditions.get('app') and conditions['app'].casefold() != (evidence['process_name'] or '').casefold():
         return False
     if conditions.get('title') and conditions['title'].casefold() not in evidence['title'].casefold():

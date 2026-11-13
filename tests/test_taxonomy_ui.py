@@ -96,7 +96,10 @@ class TaxonomyUiTests(unittest.TestCase):
 
     def test_unified_timeline_history_and_return_today(self):
         from datetime import datetime, timedelta
-        self.assertEqual(list(self.window.nav_buttons), ['时间线', '我的', '设置'])
+        self.assertEqual(list(self.window.nav_buttons), ['时间线', '统计看板', '我的', '设置'])
+        self.window.navigate('统计看板', refresh=False)
+        self.assertEqual(self.window.stack.currentIndex(), 3)
+        self.window.navigate('时间线', refresh=False)
         self.assertFalse(self.window.today_button.isVisible())
         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         with patch.object(self.window, 'refresh') as refresh:

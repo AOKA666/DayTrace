@@ -5,6 +5,7 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 PATHS = {
+    'chart': '<path d="M5 20V12h3v8M11 20V5h3v15M17 20V9h3v11"/>',
     'pending': '<circle cx="12" cy="12" r="8"/>',
     'clock': '<circle cx="12" cy="12" r="8"/><path d="M12 8v4.5l3 1.5"/>',
     'sparkles': '<path d="M9 3.5 11 8l4.5 2L11 12 9 16.5 7 12 2.5 10 7 8Z"/><path d="M17.5 13.5 19 17l3.5 1.5L19 20l-1.5 3.5L16 20l-3.5-1.5L16 17Z"/>',

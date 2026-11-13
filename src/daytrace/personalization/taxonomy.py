@@ -208,6 +208,33 @@ class TaxonomyMixin:
                 self.db.executemany('INSERT INTO feedback_tags VALUES (?,?)', ((feedback, tag) for tag in tag_ids))
             if remember:
                 self._learn_titles(snapshots, category, tag_ids)
+                self._learn_domains(identifiers, category)
+
+    def _learn_domains(self, identifiers, category):
+        import json
+        from .classifier import Classifier
+        task = self.task(category, category, '')
+        domains = set()
+        for identifier in identifiers:
+            rows = self.db.execute('SELECT DISTINCT domain FROM browser_pages WHERE interval_id=? AND expires_ms>?', (identifier, self.now())).fetchall()
+            if len(rows) != 1:
+                continue
+            domain = rows[0][0]
+            domains.add(domain)
+            conditions = json.dumps({'domain': domain}, ensure_ascii=False)
+            existing = self.db.execute('SELECT id FROM learned_rules WHERE conditions=? AND task_id=?', (conditions, task)).fetchone()
+            rule = existing[0] if existing else uid()
+            self.db.execute('INSERT OR IGNORE INTO learned_rules VALUES (?,?,?,1,1)', (rule, task, conditions))
+            self.db.execute('INSERT OR IGNORE INTO rule_origins VALUES (?,?)', (rule, identifier))
+        classifier = Classifier(self)
+        for row in self.db.execute('SELECT interval_id FROM task_results WHERE manual=0').fetchall():
+            evidence = self.evidence(row[0])
+            if not evidence or not any(p['domain'] in domains for p in evidence.get('browser_pages', [])):
+                continue
+            matched, reliability, source, reason = classifier.predict(evidence)
+            self.db.execute('UPDATE task_results SET task_id=?,reliability=?,source=?,reason=?,revision=revision+1 WHERE interval_id=? AND manual=0', (matched, reliability, source, reason, row[0]))
+            if matched:
+                classifier._apply_remembered_tags(row[0], matched, source)
 
     def _learn_titles(self, snapshots, category, tag_ids):
         """Remember exact window titles so later same-title activities get this classification."""

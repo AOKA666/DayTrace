@@ -26,7 +26,7 @@ CARD_GAP = 12
 CARD_MARKER_WIDTH = 3
 CARD_MARKER_HEIGHT = 40
 CARD_MARKER_INSET = 8
-NAV_ITEMS = (('时间线', 'clock'), ('我的', 'sparkles'), ('设置', 'settings'))
+NAV_ITEMS = (('时间线', 'clock'), ('统计看板', 'chart'), ('我的', 'sparkles'), ('设置', 'settings'))
 FONT_UI = '"Segoe UI", "Microsoft YaHei UI"'
 
 

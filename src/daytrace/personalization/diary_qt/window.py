@@ -322,6 +322,13 @@ class DiaryMainWindow(QMainWindow):
             tab_row.removeWidget(self.settings_tabs[label])
             self.settings_tabs.pop(label).deleteLater()
         self.stack.addWidget(self.my_page)
+        from .statistics import Statistics
+        self.statistics = Statistics()
+        stats_scroll = QScrollArea()
+        stats_scroll.setWidgetResizable(True)
+        stats_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        stats_scroll.setWidget(self.statistics)
+        self.stack.addWidget(stats_scroll)
         self.show_settings('采集与隐私')
 
         self.timeline.card_clicked.connect(self.open_card)
@@ -526,11 +533,11 @@ class DiaryMainWindow(QMainWindow):
         self.page = page
         self.only_review = False
         self._style_nav()
-        self.stack.setCurrentIndex({'设置': 1, '我的': 2}.get(page, 0))
+        self.stack.setCurrentIndex({'设置': 1, '我的': 2, '统计看板': 3}.get(page, 0))
         self.heading.setText(page)
-        self.date_capsule.setVisible(page == '时间线')
-        self.search.setVisible(page not in ('我的', '设置'))
-        self.pending_btn.setVisible(page not in ('我的', '设置'))
+        self.date_capsule.setVisible(page in ('时间线', '统计看板'))
+        self.search.setVisible(page == '时间线')
+        self.pending_btn.setVisible(page == '时间线')
         self._sync_date_controls()
         if refresh:
             self.refresh()
@@ -630,7 +637,7 @@ class DiaryMainWindow(QMainWindow):
             self.run_job(queued_fn, queued_callback, queued_quiet)
 
     def _refresh_live_timeline(self):
-        if self.closed or self.preview_mode or self.busy or self.page != '时间线':
+        if self.closed or self.preview_mode or self.busy or self.page not in ('时间线', '统计看板'):
             return
         today = datetime.now().strftime('%Y-%m-%d')
         if today != self._calendar_day:
@@ -672,6 +679,7 @@ class DiaryMainWindow(QMainWindow):
                 return
             if live:
                 raw, items = data
+                self.statistics.set_cards(items, self.category_colors)
                 self.rows = {r['interval_id']: r for r in raw}
                 if items != self.all_cards:
                     self.all_cards = items
@@ -685,6 +693,7 @@ class DiaryMainWindow(QMainWindow):
             activities = profile.get('activities') or list(DEFAULT_CATEGORIES)
             self.category_colors = bootstrap_category_colors(self.database, activities)
             self.all_cards = items
+            self.statistics.set_cards(items, self.category_colors)
             text = concise_overview(items)
             self.summary_label.setText(text)
             count = sum(c['review'] for c in items)
