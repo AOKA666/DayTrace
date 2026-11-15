@@ -32,9 +32,48 @@ class ActivityTests(unittest.TestCase):
         self.repo = Repository(self.path)
         self.engine = Engine(self.repo, WALL, 0, idle_ms=5000)
 
+    def test_default_counts_hour_without_input_and_preserves_lock(self):
+        self.engine.idle_ms = Engine.__init__.__defaults__[0]
+        for second in range(3601):
+            self.sample(second, idle=second)
+        self.assertEqual(self.totals().get("active"), 3600000)
+        self.assertNotIn("idle", self.totals())
+        self.sample(3601, Observation("locked"), idle=3601)
+        self.sample(3602, Observation("locked"), idle=3602)
+        self.assertEqual(self.totals()["locked"], 1000)
+        self.assert_invariants()
+
     def tearDown(self):
         self.repo.close()
         self.temp.cleanup()
+
+    def test_explicit_idle_suppresses_observations_until_resume(self):
+        self.sample(0)
+        self.sample(2)
+        self.engine.pause(2000, WALL + 2000, manual_idle=True)
+        self.sample(4, B)
+        self.sample(3602, B)
+        self.assertEqual(self.engine.current.state, 'idle')
+        self.assertIsNone(self.engine.current.title)
+        self.assertEqual(self.totals()['idle'], 3600000)
+        self.assertEqual(self.repo.db.execute('SELECT status FROM capture_sessions WHERE id=?', (self.engine.session,)).fetchone()[0], 'idle')
+        self.engine.resume(3602000, WALL + 3602000)
+        self.sample(3602, B)
+        self.sample(3604, B)
+        self.assertFalse(self.engine.paused)
+        self.assertFalse(self.engine.manual_idle)
+        self.assertEqual(self.totals()['active'], 4000)
+        self.assert_invariants()
+
+    def test_pause_and_stop_end_manual_idle(self):
+        self.sample(0)
+        self.engine.pause(1000, WALL + 1000, manual_idle=True)
+        self.engine.pause(3000, WALL + 3000)
+        self.sample(4)
+        self.assertEqual(self.totals()['idle'], 2000)
+        self.assertEqual(self.totals()['paused'], 1000)
+        self.engine.stop(5000, WALL + 5000)
+        self.assert_invariants()
 
     def sample(self, second, obs=A, idle=0, wall=None):
         self.engine.sample(second * 1000, wall if wall is not None else WALL + second * 1000, obs, idle * 1000)

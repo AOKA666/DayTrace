@@ -58,7 +58,7 @@ def cards(rows):
                 label = '短暂停留'
                 description = '低于当前停留阈值的片段；与相邻空隙一并折叠，不单独推断活动。'
             else:
-                label = {'idle': '无输入空闲', 'excluded': '私人活动', 'paused': '记录已暂停', 'locked': '设备已锁定'}.get(
+                label = {'idle': '空闲', 'excluded': '私人活动', 'paused': '记录已暂停', 'locked': '设备已锁定'}.get(
                     row['state'], '未记录时间'
                 )
                 description = '仅保留时间边界，不推断这段时间做了什么。'

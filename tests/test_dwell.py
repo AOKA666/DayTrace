@@ -92,6 +92,7 @@ class DwellTests(unittest.TestCase):
         self.assertFalse(self.repo.db.execute('PRAGMA foreign_key_check').fetchall())
 
     def test_pause_and_idle_cancel_pending(self):
+        self.engine.idle_ms = 300000  # Explicit legacy replay policy.
         self.sample(0)
         self.engine.pause(3000,103000)
         self.engine.resume(4000,104000)

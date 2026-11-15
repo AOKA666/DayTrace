@@ -502,7 +502,7 @@ class App:
                 memory.repo.cleanup(memory.now())
             win.destroy()
             self.job(work, lambda _: self.refresh())
-        for text, action in [('确认并保存', 'confirm'), ('不知道', 'unknown'), ('忽略', 'ignore'), ('私人活动', 'private'), ('撤销人工结果', 'undo')]:
+        for text, action in [('确认并保存', 'confirm'), ('不知道', 'unknown'), ('忽略', 'ignore'), ('标记为空闲', 'idle'), ('私人活动', 'private'), ('撤销人工结果', 'undo')]:
             ttk.Button(buttons, text=text, command=lambda a=action: submit(a)).pack(side='left', padx=3)
         def delete():
             if messagebox.askyesno('删除活动', '删除该片段及关联证据、修订。请先停止采集。', parent=win):

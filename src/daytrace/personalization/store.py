@@ -222,6 +222,8 @@ class Memory(TaxonomyMixin):
         return rows
 
     def feedback(self, interval_id, label='', category='', project='', action='confirm', remember=False):
+        if action == 'idle':
+            return self.mark_idle(interval_id)
         if action == 'private':
             with InstanceLock(self.repo.path):
                 self._feedback(interval_id, label, category, project, action, remember)
@@ -230,6 +232,25 @@ class Memory(TaxonomyMixin):
                 self.db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             return
         return self._feedback(interval_id, label, category, project, action, remember)
+
+    def mark_idle(self, interval_id):
+        """User correction of a completed interval, preserving its time boundaries."""
+        from .classifier import Classifier
+        Classifier(self).analyze([interval_id])
+        with self.repo.transaction():
+            row = self.db.execute('''SELECT i.*,s.ended_ms,s.heartbeat_ms
+                FROM activity_intervals i JOIN capture_sessions s ON s.id=i.session_id
+                WHERE i.id=?''', (interval_id,)).fetchone()
+            if not row or row['state'] != 'active':
+                raise ValueError('只能将活动记录标记为空闲')
+            if row['ended_ms'] is None and row['end_ms'] >= row['heartbeat_ms']:
+                raise ValueError('该片段仍在记录，请先暂停监测后再标记')
+            if not self.db.execute('SELECT 1 FROM task_results WHERE interval_id=?', (interval_id,)).fetchone():
+                raise ValueError('记录依据不可用，无法标记')
+            self._feedback(interval_id, action='ignore', transaction=False)
+            self.db.execute("UPDATE activity_intervals SET state='idle' WHERE id=?", (interval_id,))
+            self.db.execute("UPDATE task_results SET reason='用户手动标记为空闲',disposition='confirmed' WHERE interval_id=?", (interval_id,))
+            self.db.execute("UPDATE activity_feedback SET action='mark_idle' WHERE id=(SELECT id FROM activity_feedback WHERE interval_id=? ORDER BY rowid DESC LIMIT 1)", (interval_id,))
 
     def feedback_many(self, identifiers, label, category='', project='', remember=True):
         """One user decision for contiguous source fragments, with atomic revisions."""

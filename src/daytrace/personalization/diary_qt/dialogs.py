@@ -159,6 +159,7 @@ class DetailDialog(QDialog):
         for text, action in [
             ('不知道', 'unknown'),
             ('忽略', 'ignore'),
+            ('标记为空闲', 'idle'),
             ('私人活动', 'private'),
             ('撤销人工结果', 'undo'),
         ]:

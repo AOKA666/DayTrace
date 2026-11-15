@@ -1,0 +1,3 @@
+BEGIN IMMEDIATE;
+ALTER TABLE control_commands ADD COLUMN manual_idle INTEGER NOT NULL DEFAULT 0 CHECK(manual_idle IN (0,1));
+COMMIT;

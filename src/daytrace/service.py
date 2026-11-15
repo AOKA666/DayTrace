@@ -38,14 +38,14 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
             mono, wall = clock()
             repo.recover(wall)
             repo.cleanup(wall)
-            engine = Engine(repo, wall, mono, int(idle_seconds * 1000),min_active_ms=round(dwell*1000))
+            engine = Engine(repo, wall, mono, float("inf"),min_active_ms=round(dwell*1000))
             if content:
                 from .content.coordinator import Coordinator
                 collector = Coordinator(repo,engine,exclude or [],exclude_windows,permit)
             deadline = mono + int(duration * 1000) if duration else None
             print("MONITORING | content="+str(content)+" | screenshots="+str(bool(permit))+" | local only; no keys, clipboard or network", flush=True)
             print(f"Database: {database.resolve()} | session: {engine.session}", flush=True)
-            print("Use another terminal: pause / resume / stop. Ctrl+C stops. Idle means no input, not absence.", flush=True)
+            print("Use another terminal: idle / pause / resume / stop. Idle is explicitly user-controlled. Ctrl+C stops.", flush=True)
             print(f'Minimum page dwell: {dwell:g} seconds; shorter visits retain anonymous gap timing only.',flush=True)
             print('BROWSER: local address-bar URLs; same-host dwell; query/fragment omitted; unavailable URLs fall back to title.',flush=True)
             next_poll = mono
@@ -62,7 +62,7 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
                     if collector:
                         collector.invalidate(clear=True)
                     if command["command"] == "pause":
-                        engine.pause(mono, wall)
+                        engine.pause(mono, wall, manual_idle=bool(command['manual_idle']))
                     elif command["command"] == "resume":
                         engine.resume(mono, wall)
                         # Reject pre-resume events; no stale title can enter the new state.
@@ -114,12 +114,12 @@ def run(database, idle_seconds=300, exclude=None, duration=None, content=False, 
                     observation, idle = Observation("paused"), 0
                 else:
                     try:
-                        idle = source.api.idle_for_ms()
+                        idle = 0  # Foreground viewing does not require keyboard/mouse input.
                         # Session notifications are applied even if a subsequent unlock is queued.
                         if kind in ("locked", "suspended"):
                             observation = Observation(kind)
                         else:
-                            # Resolve exclusion/permission state first, never read idle titles.
+                            # Resolve exclusion/permission state before reading titles.
                             observation = source.snapshot(exclude or [], hwnd, read_title=idle < engine.idle_ms)
                     except OSError:
                         observation, idle = Observation("unknown"), 0
@@ -161,7 +161,7 @@ def simulate(database):
             if repo.db.execute("SELECT 1 FROM capture_sessions").fetchone():
                 raise RuntimeError("Simulation requires an empty database; choose a separate --db path.")
             wall = 1_798_761_600_000
-            engine = Engine(repo, wall, 0, simulated=True)
+            engine = Engine(repo, wall, 0, idle_ms=300_000, simulated=True)
             for second in range(1801):
                 if second == 1200:
                     engine.pause(second * 1000, wall + second * 1000)

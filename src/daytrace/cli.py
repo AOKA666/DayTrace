@@ -31,7 +31,10 @@ def control(database, command):
             raise RuntimeError("Collector has not started a session yet.")
         identifier = uid()
         with db:
-            db.execute("INSERT INTO control_commands(id,session_id,command,requested_ms) VALUES (?,?,?,?)", (identifier, session[0], command, time.time_ns() // 1_000_000))
+            if command == 'idle':
+                db.execute("INSERT INTO control_commands(id,session_id,command,requested_ms,manual_idle) VALUES (?,?,'pause',?,1)", (identifier, session[0], time.time_ns() // 1_000_000))
+            else:
+                db.execute("INSERT INTO control_commands(id,session_id,command,requested_ms) VALUES (?,?,?,?)", (identifier, session[0], command, time.time_ns() // 1_000_000))
         until = time.monotonic() + 10
         while time.monotonic() < until:
             row = db.execute("SELECT result FROM control_commands WHERE id=?", (identifier,)).fetchone()
@@ -142,7 +145,7 @@ def main(argv=None):
     ui_parser.add_argument('--tk-diary',action='store_true',help='Open the Tk diary shell (pre-Qt) instead of the default Qt shell')
     sub.add_parser('evaluate', help='Run synthetic learning evaluation in a temporary database; no desktop/network')
     start = sub.add_parser("start", help="Explicitly begin collection in this terminal; Ctrl+C stops")
-    start.add_argument("--idle-seconds", type=positive, default=300)
+    start.add_argument("--idle-seconds", type=positive, default=300, help=argparse.SUPPRESS)
     from .preferences import validate_dwell
     start.add_argument('--min-dwell-seconds', type=validate_dwell, help='Minimum page dwell, 0–300 seconds; default uses UI preference (initially 5)')
     start.add_argument("--duration", type=positive, help="Stop automatically after this many seconds")
@@ -168,7 +171,7 @@ def main(argv=None):
     structure.add_argument('--check-text',action='store_true',help='Also extract visible text transiently; print only status and character count')
     info=sub.add_parser('window-info',help='After a delay, print foreground app and physical size only; no content or image')
     info.add_argument('--delay',type=positive,default=5)
-    for name in ("pause", "resume", "stop", "status", "doctor", "simulate", "prune"):
+    for name in ("pause", "idle", "resume", "stop", "status", "doctor", "simulate", "prune"):
         sub.add_parser(name)
     show = sub.add_parser("records")
     show.add_argument("--table", choices=("events", "intervals", "sessions", "summary", "browser"), default="intervals")
@@ -236,7 +239,7 @@ def main(argv=None):
                 raise RuntimeError('Foreground window is unavailable or excluded.')
             r=target['rect']
             print(json.dumps({'app':target['process'],'width':r[2]-r[0],'height':r[3]-r[1]},ensure_ascii=True))
-        elif args.command in ("pause", "resume", "stop"):
+        elif args.command in ("pause", "idle", "resume", "stop"):
             control(args.db, args.command)
         elif args.command == "records":
             if not 1 <= args.limit <= 100000:

@@ -36,6 +36,32 @@ class LearningTests(unittest.TestCase):
         self.memory.close()
         self.temp.cleanup()
 
+    def test_manual_idle_preserves_time_and_overrides_reanalysis(self):
+        self.classifier.analyze()
+        self.memory.feedback(self.ids[0], 'Tutorial', 'Learning', remember=True)
+        before = dict(self.memory.db.execute('SELECT * FROM activity_intervals WHERE id=?', (self.ids[0],)).fetchone())
+        self.memory.feedback(self.ids[0], action='idle')
+        self.classifier.analyze()
+        after = dict(self.memory.db.execute('SELECT * FROM activity_intervals WHERE id=?', (self.ids[0],)).fetchone())
+        self.assertEqual(after, dict(before, state='idle'))
+        result = self.memory.db.execute('SELECT * FROM task_results WHERE interval_id=?', (self.ids[0],)).fetchone()
+        self.assertEqual(result['manual'], 1)
+        self.assertIsNone(result['task_id'])
+        actions = [r[0] for r in self.memory.db.execute('SELECT action FROM activity_feedback WHERE interval_id=? ORDER BY rowid', (self.ids[0],))]
+        self.assertEqual(actions, ['confirm', 'mark_idle'])
+        self.assertFalse(self.memory.db.execute('SELECT 1 FROM activity_cases WHERE interval_id=?', (self.ids[0],)).fetchone())
+        with self.assertRaises(ValueError):
+            self.memory.feedback(self.ids[0], action='idle')
+
+    def test_manual_idle_rejects_current_live_interval(self):
+        engine = Engine(self.memory.repo, NOW + 10000, 0, simulated=True)
+        engine.sample(0, NOW + 10000, Observation('active', 'chrome.exe', 'browser', 'Tutorial', 1))
+        engine.sample(1000, NOW + 11000, Observation('active', 'chrome.exe', 'browser', 'Tutorial', 1))
+        with self.assertRaises(ValueError):
+            self.memory.feedback(engine.interval_id, action='idle')
+        self.assertEqual(self.memory.db.execute('SELECT state FROM activity_intervals WHERE id=?', (engine.interval_id,)).fetchone()[0], 'active')
+        engine.stop(2000, NOW + 12000)
+
     def test_user_categories_limit_ai_candidates_and_forget_colors(self):
         self.memory.add_category('学习', '#7566D9')
         self.memory.add_category('生活', '#3C9B92')

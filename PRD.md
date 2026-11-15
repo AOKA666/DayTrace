@@ -170,3 +170,18 @@ OCR 必须在用户开启截图并许可应用和区域后按需触发；采用�
 
 “识别与学习”保留实际可操作的自动分类规则管理，展示可读条件、目标分类及状态，支持批准、启用、停用和删除；移除规则建议入口。纠正历史仅包含 AI 已提供分类、用户改为另一分类的记录，显示时间、活动、AI 原分类和改后分类。给未识别活动选分类、接受 AI 原分类或改标签，不算 AI 纠正。分类确认可以继续沿用已授权的同标题分类规则，但不计入 AI 纠正；旧日志缺乏修改前来源，不追溯猜测为 AI 纠正。
 2026-11-10 导航合并：默认界面仅有时间线、我的、设置。时间线默认显示今天，通过日期切换回看历史，非今天显示“回到今天”；原始历史数据保持不变，今天自动刷新，历史日期按需读取。
+
+
+## 2026-11-15: Continuous foreground time
+
+User requested removal of automatic input-idle classification. Live capture now counts the eligible foreground application continuously, even without mouse or keyboard input. Lock, suspend, manual pause, exclusions and unknown observation gaps remain boundaries. No new capture permissions are enabled. Historical idle rows remain unchanged. The legacy --idle-seconds argument is accepted but ignored by live capture; finite engine thresholds remain only for historical simulation/regression compatibility. Automated validation is recorded separately from real desktop validation.
+
+
+## 2026-11-15: Manual idle correction
+
+Activity detail provides a manual idle action for completed active fragments. It retains original time boundaries and evidence under existing retention policies, removes task/category attribution and learned examples for that fragment, records a human feedback revision, and invalidates in-flight analysis. Reanalysis must not override the correction. The current live interval is rejected until capture is paused or it has ended. No automatic input-idle detection or new collection permissions are enabled. Applies to both Qt and legacy detail dialogs.
+
+
+## 2026-11-15: Explicit idle start/end (clarified requirement)
+
+The main recording toolbar offers Start idle while recording and End idle while idle. Start idle immediately enters an anonymous timed idle state; foreground, content, screenshot and browser probes are suppressed using the existing pause protections. End idle resumes monitoring using fresh foreground observations. No mouse or keyboard activity ends idle automatically. Ordinary pause and stop remain separate controls. Stopped/paused collectors cannot enter idle. Migration 010 adds a command flag without rewriting historical records. Both Qt and legacy shells display the idle status. Engine tests cover elapsed idle time, resume, pause and non-overlap; UI tests verify start/end command wiring. Real desktop capture is not started by tests.

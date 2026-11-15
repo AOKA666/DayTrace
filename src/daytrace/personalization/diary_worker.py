@@ -33,7 +33,7 @@ def validate(response,payload):
 def capture_state(memory):
     if not is_running(memory.repo.path):return 'stopped'
     session=memory.db.execute('SELECT status FROM capture_sessions WHERE ended_ms IS NULL ORDER BY rowid DESC LIMIT 1').fetchone()
-    return 'paused' if session and session[0]=='paused' else 'running'
+    return session[0] if session and session[0] in ('paused', 'idle') else 'running'
 
 
 def controls(memory):
@@ -60,7 +60,7 @@ def tick(database,cancel,analyze=True,provider_factory=TextProvider):
         # Rule/history classification remains local and works with cloud disabled.
         pending=[r[0] for r in memory.db.execute("SELECT i.id FROM activity_intervals i LEFT JOIN task_results r ON r.interval_id=i.id WHERE i.state='active' AND (r.interval_id IS NULL OR r.source='pending') ORDER BY i.start_ms DESC LIMIT 100")]
         if pending:Classifier(memory).analyze(pending)
-        if config.get('auto_ai') is not True or state=='paused':return result
+        if config.get('auto_ai') is not True or state in ('paused', 'idle'):return result
         since=config.get('ai_since_ms')
         if not isinstance(since,int):return result
         # Do not resend old AI results or manual decisions. At most 20 closed events.

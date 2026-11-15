@@ -10,6 +10,36 @@ DIARY_QT = Path(__file__).resolve().parents[1] / 'src' / 'daytrace' / 'personali
 
 
 class DiaryQtTests(unittest.TestCase):
+    def test_idle_control_tracks_session_and_sends_start_end(self):
+        import tempfile
+        from unittest.mock import patch
+        from PySide6.QtWidgets import QApplication
+        from daytrace.personalization.diary_qt.window import DiaryMainWindow
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as folder:
+            window = DiaryMainWindow(Path(folder) / 'test.sqlite3', preview_mode=True)
+            try:
+                window.preview_mode = False
+                window.busy = False
+                window.run_job = lambda work, done: work(None)
+                with patch('daytrace.personalization.diary_qt.window.read_capture_state', return_value='running'), patch('daytrace.cli.control') as control:
+                    window.toggle_idle()
+                    control.assert_called_once_with(window.database, 'idle')
+                    self.assertTrue(window.idle_button.isEnabled())
+                with patch('daytrace.personalization.diary_qt.window.read_capture_state', return_value='idle'), patch('daytrace.cli.control') as control:
+                    window.toggle_idle()
+                    control.assert_called_once_with(window.database, 'resume')
+                    self.assertEqual(window.idle_button.text(), '结束空闲')
+                window._update_capture_chrome('stopped')
+                self.assertFalse(window.idle_button.isEnabled())
+            finally:
+                window.preview_mode = True
+                window.close()
+                window.executor.shutdown(wait=True, cancel_futures=True)
+                window.ai_executor.shutdown(wait=True, cancel_futures=True)
+                window._capture_executor.shutdown(wait=True, cancel_futures=True)
+                app.processEvents()
+
     @unittest.skipUnless(find_spec('PySide6'), 'PySide6 required')
     def test_theme_and_timeline_import(self):
         from daytrace.personalization.diary_qt.theme import STYLESHEET

@@ -76,6 +76,8 @@ class Repository:
             if not self.db.execute("SELECT 1 FROM devices").fetchone():
                 self.db.execute("INSERT INTO devices VALUES (?,?)", (uid(), "windows"))
         self.device_id = self.db.execute("SELECT id FROM devices").fetchone()[0]
+        if 'manual_idle' not in {r[1] for r in self.db.execute('PRAGMA table_info(control_commands)')}:
+            self.db.executescript((Path(__file__).parent / 'migrations/010_manual_idle.sql').read_text('utf-8'))
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='browser_pages'").fetchone():
             self.db.executescript((Path(__file__).parent / 'migrations/008_browser_extension.sql').read_text('utf-8'))
 

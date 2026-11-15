@@ -241,6 +241,8 @@ class DiaryApp(App):
         tk.Label(right, textvariable=self.capture_state, bg=BG, fg=MUTED, font=('Microsoft YaHei UI', 9)).pack(side='right', padx=(10, 0))
         self.capture_button = ttk.Button(right, text='开始记录', style='Accent.TButton', command=self.toggle_capture)
         self.capture_button.pack(side='right')
+        self.idle_button = ttk.Button(right, text='开始空闲', command=self.toggle_idle, state='disabled')
+        self.idle_button.pack(side='right', padx=8)
 
         bar = tk.Frame(self.timeline_tab, bg=BG)
         bar.pack(fill='x', pady=(0, 14))
@@ -594,6 +596,14 @@ class DiaryApp(App):
         if self.ai_cancel:
             self.ai_cancel.set()
 
+    def toggle_idle(self):
+        if self.recording not in ('running', 'idle'):
+            return
+        from ..cli import control
+        self.cancel_cloud()
+        command = 'resume' if self.recording == 'idle' else 'idle'
+        self.job(lambda _: control(self.database, command))
+
     def background(self):
         if self.closed:
             return
@@ -601,9 +611,10 @@ class DiaryApp(App):
             try:
                 result = self.ai_future.result()
                 self.recording = result['state']
-                self.capture_state.set({'running': '正在记录', 'paused': '已暂停', 'stopped': '未开始记录'}[self.recording])
+                self.capture_state.set({'idle': '正在空闲', 'running': '正在记录', 'paused': '已暂停', 'stopped': '未开始记录'}[self.recording])
+                self.idle_button.configure(text='结束空闲' if self.recording == 'idle' else '开始空闲', state='normal' if self.recording in ('running', 'idle') else 'disabled')
                 self.capture_button.configure(
-                    text={'running': '暂停', 'paused': '恢复', 'stopped': '开始记录'}[self.recording]
+                    text={'idle': '暂停记录', 'running': '暂停', 'paused': '恢复', 'stopped': '开始记录'}[self.recording]
                 )
                 if result.get('note'):
                     self.ai_note.set(result['note'])

@@ -16,7 +16,7 @@ def clean_observation(observation):
 
 
 class Engine:
-    def __init__(self, repo, wall_ms, mono_ms, idle_ms=300_000, simulated=False, min_active_ms=0):
+    def __init__(self, repo, wall_ms, mono_ms, idle_ms=float("inf"), simulated=False, min_active_ms=0):
         self.repo = repo
         self.session = uid()
         self.origin_mono = mono_ms
@@ -32,6 +32,7 @@ class Engine:
         self.event_id = None
         self.interval_id = None
         self.paused = False
+        self.manual_idle = False
         self.stopped = False
         self.last_wall_offset = wall_ms - self.at
         with repo.transaction():
@@ -122,7 +123,7 @@ class Engine:
         at = self._time(mono_ms)
         # Paused/blocked observations cannot carry application or title data.
         if self.paused:
-            observation = Observation("paused")
+            observation = Observation("idle" if self.manual_idle else "paused")
         elif observation.state != "active":
             observation = Observation(observation.state)
         else:
@@ -132,7 +133,7 @@ class Engine:
                 self.repo.event(self.session, at, wall_ms, "clock_adjustment", "unknown", source="clock")
                 self.last_wall_offset = wall_ms - at
             # Never bridge unobserved stalls/sleep as productive time.
-            if mono_ms - self.last_mono > 5000 and self.current and self.current.state not in ("paused", "suspended", "locked"):
+            if mono_ms - self.last_mono > 5000 and self.current and not self.manual_idle and self.current.state not in ("paused", "suspended", "locked"):
                 self._transition(Observation("unknown"), self.at, wall_ms, "gap", "observation_gap")
             if self.interval_id:
                 self.repo.db.execute("UPDATE activity_intervals SET end_ms=? WHERE id=?", (at, self.interval_id))
@@ -147,16 +148,18 @@ class Engine:
                     self.interval_id = self.repo.interval(self.session, at, at, "idle")
             else:
                 self._transition(observation, at, wall_ms, source)
-            self.repo.db.execute("UPDATE capture_sessions SET heartbeat_ms=?,status=? WHERE id=?", (at, "paused" if self.paused else "running", self.session))
+            self.repo.db.execute("UPDATE capture_sessions SET heartbeat_ms=?,status=? WHERE id=?", (at, "idle" if self.manual_idle else "paused" if self.paused else "running", self.session))
         self.at, self.last_mono = at, mono_ms
 
-    def pause(self, mono, wall):
+    def pause(self, mono, wall, manual_idle=False):
         self.paused = True
+        self.manual_idle = manual_idle
         self.sample(mono, wall, Observation("paused"), source="command")
 
     def resume(self, mono, wall):
         if self.paused:
             self.paused = False
+            self.manual_idle = False
             self.sample(mono, wall, Observation("unknown"), source="command")
 
     def stop(self, mono, wall, reason="stop"):
