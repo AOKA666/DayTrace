@@ -69,6 +69,9 @@ QLabel#brandSubtitle {{ color:{MUTED}; font-size:14px; }}
 QLabel#title {{ font-size:28px; font-weight:600; }}
 QLabel#sectionTitle, QLabel#summaryTitle {{ font-size:18px; font-weight:600; }}
 QLabel#caption, QLabel#fieldLabel {{ color:{MUTED}; font-size:13px; }}
+QLabel#keyStatus {{ color:{MUTED}; font-size:13px; padding-top:4px; }}
+QLabel#keyStatus[keyState="saved"] {{ color:#16794A; }}
+QLabel#keyStatus[keyState="missing"] {{ color:#A06020; }}
 QLabel#fieldLabel {{ padding-top:6px; }}
 QScrollArea {{ border:none; background:{BG}; }}
 QScrollBar:vertical {{ background:transparent; width:10px; margin:4px 0; }}
@@ -105,6 +108,12 @@ QPushButton#sectionTab, QPushButton#sectionTabActive {{ border:none; padding:9px
 QPushButton#sectionTab {{ color:{MUTED}; background:transparent; }}
 QPushButton#sectionTabActive {{ color:{ACCENT}; background:{ACCENT_SOFT}; }}
 QFrame#settingsPanel, QFrame#summaryCard {{ background:{SURFACE}; border:1px solid {BORDER}; border-radius:16px; }}
+QFrame#recognitionProgress {{ background:{SIDEBAR}; border:1px solid {BORDER}; border-radius:12px; }}
+QLabel#recognitionStatus {{ font-size:14px; font-weight:600; color:{INK}; }}
+QLabel#recognitionStatus[recognitionState="complete"] {{ color:#16794A; }}
+QLabel#recognitionStatus[recognitionState="blocked"], QLabel#recognitionStatus[recognitionState="error"] {{ color:#A06020; }}
+QProgressBar#recognitionBar {{ background:#E8EAF0; border:none; border-radius:3px; min-height:6px; max-height:6px; }}
+QProgressBar#recognitionBar::chunk {{ background:{ACCENT}; border-radius:3px; }}
 QFrame#dateCapsule {{ background:transparent; border:none; }}
 QLineEdit#dateField {{ font-weight:500; padding-left:4px; }}
 QLineEdit#searchField {{ padding-left:4px; }}

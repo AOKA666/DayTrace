@@ -90,6 +90,11 @@ class TimelinePaintTests(unittest.TestCase):
         self.assertEqual(fill(), (255,255,255))
         self.assertEqual(widget.marker_color.name(), '#3c9b92')
         self.assertEqual(widget.status.text(), '规则识别')
+        card['rows'][0].update(source='ai', reliability='supported')
+        card['status'] = 'AI 自动分类'
+        widget.bind(card, {'工作':'#3C9B92'})
+        self.assertEqual(widget.marker_color.name(), '#3c9b92')
+        self.assertEqual(widget.status.text(), 'AI 自动分类')
         card['review'] = True
         widget.bind(card, {'工作':'#3C9B92'})
         self.assertEqual(fill(), QColor(PENDING_CARD_BG).getRgb()[:3])

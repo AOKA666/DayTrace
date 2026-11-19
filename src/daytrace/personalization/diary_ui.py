@@ -26,7 +26,7 @@ from .diary_theme import (
 )
 from .store import Memory
 from .classifier import Classifier
-from .provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider
+from .provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
 from ..preferences import options, save_options
 
 
@@ -545,7 +545,7 @@ class DiaryApp(App):
             '开启后台 AI 分析',
             f'发送到：{self.endpoint.get().strip()}\n模型：{self.model.get().strip()}\n'
             '将自动发送开启后产生的活动标题、最多 2000 字脱敏正文、个人档案和候选分类；'
-            '复盘会发送授权范围内的活动名称、分类和时长。\n每批最多 20 段，至少间隔 60 秒；复盘最多 100 段。'
+            '复盘会发送授权范围内的活动名称、分类和时长。\n每批最多 8 段；成功后约 3 秒继续，失败退避 5 分钟。'
             '不发送截图，不补发开启前的历史正文。\n可以随时关闭；已发送内容无法撤回。是否开启？',
         ):
             self.auto_ai.set(False)
@@ -560,8 +560,16 @@ class DiaryApp(App):
         self.next_ai = 0
 
     def retry_ai(self):
+        config = options(self.database)
+        if config.get('auto_ai') is not True:
+            self.ai_note.set('未重试 · 请先开启后台 AI 分析。')
+            return
+        endpoint = config.get('ai_endpoint') or self.endpoint.get().strip() or DEEPSEEK_ENDPOINT
+        if not Vault(endpoint).available():
+            self.ai_note.set('未重试 · 缺少服务密钥，请先设置密钥。')
+            return
         self.next_ai = 0
-        self.ai_note.set('将在下一轮重试授权范围内的待识别活动。')
+        self.ai_note.set('已安排重试 · 将使用已保存个人档案分析授权范围内的待识别活动。')
 
     def toggle_capture(self):
         if getattr(self, 'preview_mode', False):
@@ -620,6 +628,11 @@ class DiaryApp(App):
                     self.ai_note.set(result['note'])
                 if result.get('cooldown'):
                     self.next_ai = time.monotonic() + result['cooldown']
+                elif result.get('recognition'):
+                    from .diary_worker import SUCCESS_BATCH_DELAY_SECONDS, IDLE_AI_POLL_SECONDS
+                    delay = (SUCCESS_BATCH_DELAY_SECONDS if result['recognition'].get('queued', 0)
+                        else IDLE_AI_POLL_SECONDS)
+                    self.next_ai = time.monotonic() + delay
                 if not hasattr(self, 'loaded_preferences'):
                     config = result['options']
                     self.loaded_preferences = True
@@ -632,13 +645,13 @@ class DiaryApp(App):
                 self.ai_note.set('后台整理暂不可用，原始记录已保留。')
             self.ai_future = None
         if self.ai_future is None and not self.busy:
-            from .diary_worker import tick
+            from .diary_worker import tick, IDLE_AI_POLL_SECONDS
             import threading
 
             self.ai_cancel = threading.Event()
             analyze = time.monotonic() >= self.next_ai
             if analyze:
-                self.next_ai = time.monotonic() + 60
+                self.next_ai = time.monotonic() + IDLE_AI_POLL_SECONDS
             cancel = self.ai_cancel
 
             def work():

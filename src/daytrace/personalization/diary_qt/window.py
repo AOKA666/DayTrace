@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -40,7 +41,7 @@ from PySide6.QtWidgets import (
 
 from ..classifier import Classifier
 from ..diary_model import DEFAULT_CATEGORIES, build_display_cards, cards, overview
-from ..diary_worker import tick
+from ..diary_worker import tick, SUCCESS_BATCH_DELAY_SECONDS, IDLE_AI_POLL_SECONDS
 from ...preferences import diary_display_ms, options, save_options, show_short_dwells, validate_dwell
 from ..profile import propose_profile
 from ..provider import DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, TextProvider, Vault
@@ -78,6 +79,10 @@ class DiaryMainWindow(QMainWindow):
         self.closed = False
         self._capture_dirty = False
         self._model_dirty = False
+        self._key_available = None
+        self.profile_recognition_active = False
+        self.profile_recognition_stage = 'idle'
+        self.profile_recognition_base_detail = ''
         self.recording = 'stopped'
         self.ai_future = None
         self.ai_cancel = None
@@ -411,11 +416,38 @@ class DiaryMainWindow(QMainWindow):
             self.fields[key] = self._settings_field(daily, label)
         actions = QHBoxLayout()
         save_d = QPushButton('保存个人档案')
-        save_d.setObjectName('accent')
+        save_d.setObjectName('ghost')
         save_d.clicked.connect(self.save_profile)
         actions.addWidget(save_d)
+        save_and_retry = QPushButton('保存并识别待识别活动')
+        save_and_retry.setObjectName('accent')
+        save_and_retry.clicked.connect(lambda: self.save_profile(retry=True))
+        actions.addWidget(save_and_retry)
         actions.addStretch()
         daily.addLayout(actions)
+        self.profile_note = QLabel('保存档案后，可在这里直接重新识别已有待识别活动。')
+        self.profile_note.setObjectName('caption')
+        self.profile_note.setWordWrap(True)
+        daily.addWidget(self.profile_note)
+        recognition = QFrame()
+        recognition.setObjectName('recognitionProgress')
+        recognition_box = QVBoxLayout(recognition)
+        recognition_box.setContentsMargins(16, 14, 16, 14)
+        recognition_box.setSpacing(7)
+        self.profile_recognition_status = QLabel('尚未开始识别')
+        self.profile_recognition_status.setObjectName('recognitionStatus')
+        recognition_box.addWidget(self.profile_recognition_status)
+        self.profile_recognition_bar = QProgressBar()
+        self.profile_recognition_bar.setObjectName('recognitionBar')
+        self.profile_recognition_bar.setRange(0, 1)
+        self.profile_recognition_bar.setValue(0)
+        self.profile_recognition_bar.setTextVisible(False)
+        recognition_box.addWidget(self.profile_recognition_bar)
+        self.profile_recognition_detail = QLabel('保存档案并选择识别后，这里会显示真实处理数量。')
+        self.profile_recognition_detail.setObjectName('caption')
+        self.profile_recognition_detail.setWordWrap(True)
+        recognition_box.addWidget(self.profile_recognition_detail)
+        daily.addWidget(recognition)
 
         projects = self._settings_panel('当前项目', '项目与环境')
         for key, label in [('projects', '项目名称（逗号分隔）'), ('software', '常用软件'), ('websites', '常用网站')]:
@@ -517,6 +549,11 @@ class DiaryMainWindow(QMainWindow):
             b.setObjectName('ghost')
             b.clicked.connect(slot)
             advanced.addWidget(b)
+        self.key_status = QLabel('○ 正在检查密钥状态…')
+        self.key_status.setObjectName('keyStatus')
+        self.key_status.setProperty('keyState', 'checking')
+        self.key_status.setWordWrap(True)
+        advanced.addWidget(self.key_status)
 
     def _style_nav(self):
         for name, btn in self.nav_buttons.items():
@@ -724,6 +761,7 @@ class DiaryMainWindow(QMainWindow):
                     self.endpoint.setText(config['ai_endpoint'])
                 if config.get('ai_model') and not self._model_dirty:
                     self.model.setText(config['ai_model'])
+                self.refresh_key_status(self.endpoint.text().strip())
             self.set_catalog(catalog)
 
         self.run_job(read, show, quiet=quiet)
@@ -815,7 +853,7 @@ class DiaryMainWindow(QMainWindow):
     def propose(self):
         self.fill_profile(propose_profile(self.description.toPlainText()))
 
-    def save_profile(self):
+    def save_profile(self, retry=False):
         profile = {'description': self.description.toPlainText()}
         for key, entry in self.fields.items():
             value = entry.text()
@@ -824,7 +862,15 @@ class DiaryMainWindow(QMainWindow):
                 if key in ('activities', 'projects', 'software', 'websites')
                 else value
             )
-        self.run_job(lambda m: m.save_profile(dict(profile, activities=m.profile()['activities'])), lambda _: self.refresh())
+        def saved(_result):
+            self.profile_note.setText('个人档案已保存。')
+            if retry:
+                if self.retry_ai(notify=True):
+                    self.profile_note.setText('个人档案已保存，待识别活动已安排重新识别。')
+                else:
+                    self.profile_note.setText('个人档案已保存；识别尚未开始，请按提示完成 AI 设置。')
+            self.refresh()
+        self.run_job(lambda m: m.save_profile(dict(profile, activities=m.profile()['activities'])), saved)
 
     def _capture_edited(self, text):
         self._capture_dirty = True
@@ -833,6 +879,7 @@ class DiaryMainWindow(QMainWindow):
     def _model_edited(self, text):
         self._model_dirty = True
         self.model_save_note.setText('尚未保存 · 请点击“保存模型配置”')
+        self._set_key_status(None, '○ 模型配置已修改，保存后将检查对应服务的密钥。')
 
     def _save_show_short_dwells(self, enabled):
         save_options(self.database, show_short_dwells=enabled)
@@ -887,12 +934,22 @@ class DiaryMainWindow(QMainWindow):
         self._model_dirty = False
         self.model_save_note.setText('模型配置已保存')
         self.ai_note.setText('模型配置已保存，请重新开启后台分析。')
+        self.refresh_key_status(endpoint)
 
     def toggle_ai(self, enabled):
         if self.preview_mode:
             self.auto_ai.blockSignals(True)
             self.auto_ai.setChecked(False)
             self.auto_ai.blockSignals(False)
+            return
+        endpoint = self.endpoint.text().strip()
+        if enabled and not Vault(endpoint).available():
+            self.auto_ai.blockSignals(True)
+            self.auto_ai.setChecked(False)
+            self.auto_ai.blockSignals(False)
+            save_options(self.database, auto_ai=False)
+            self.ai_note.setText('未开启 · 请先在“模型与高级”中设置服务密钥')
+            QMessageBox.information(self, '缺少服务密钥', '请先点击“设置密钥”，保存后再开启后台 AI 分析。')
             return
         if enabled and QMessageBox.question(
             self,
@@ -915,9 +972,103 @@ class DiaryMainWindow(QMainWindow):
         self.ai_note.setText('已开启 · 后台批量整理新活动' if enabled else '已关闭 · 无云端发送')
         self.next_ai = 0
 
-    def retry_ai(self):
+    def retry_ai(self, notify=False):
+        config = options(self.database)
+        if config.get('auto_ai') is not True:
+            message = '请先开启“允许后台 AI 分析新活动”。'
+            self.ai_note.setText('未重试 · ' + message)
+            self._set_profile_recognition('blocked', message)
+            if notify:
+                QMessageBox.information(self, '尚未开始识别', message)
+            return False
+        endpoint = config.get('ai_endpoint') or self.endpoint.text().strip() or DEEPSEEK_ENDPOINT
+        if not Vault(endpoint).available():
+            message = '缺少服务密钥，请先在“模型与高级”中为当前模型服务设置密钥。'
+            self.ai_note.setText('未重试 · ' + message)
+            self._set_profile_recognition('blocked', message)
+            if notify:
+                QMessageBox.information(self, '尚未开始识别', message)
+            return False
         self.next_ai = 0
-        self.ai_note.setText('将在下一轮重试授权范围内的待识别活动。')
+        self.ai_note.setText('已安排重试 · 将使用已保存个人档案分析授权范围内的待识别活动。')
+        self.profile_recognition_active = True
+        self._set_profile_recognition('queued', '已排队，正在统计待识别活动。')
+        return True
+
+    def _set_profile_recognition(self, stage, detail='', progress=None):
+        titles = {
+            'idle': '尚未开始识别',
+            'queued': '识别任务已排队',
+            'running': '正在识别活动…',
+            'waiting': '本批识别完成，等待下一批',
+            'complete': '识别完成',
+            'paused': '识别暂缓',
+            'blocked': '识别尚未开始',
+            'unavailable': '暂无可用证据',
+            'error': '本批识别未完成',
+            'disabled': 'AI 识别未开启',
+        }
+        self.profile_recognition_stage = stage
+        self.profile_recognition_base_detail = detail or '等待识别状态更新。'
+        self.profile_recognition_status.setText(titles.get(stage, '识别状态'))
+        self.profile_recognition_status.setProperty('recognitionState', stage)
+        self.profile_recognition_status.style().unpolish(self.profile_recognition_status)
+        self.profile_recognition_status.style().polish(self.profile_recognition_status)
+        if stage in ('queued', 'running') and progress is None:
+            self.profile_recognition_bar.setRange(0, 0)
+        elif progress is not None:
+            total = max(0, int(progress.get('total', 0)))
+            queued = max(0, int(progress.get('queued', progress.get('pending', 0))))
+            self.profile_recognition_bar.setRange(0, max(1, total))
+            self.profile_recognition_bar.setValue(max(0, total-queued))
+        else:
+            self.profile_recognition_bar.setRange(0, 1)
+            self.profile_recognition_bar.setValue(1 if stage == 'complete' else 0)
+        self.profile_recognition_detail.setText(self.profile_recognition_base_detail)
+        self._update_recognition_countdown()
+        if stage in ('complete', 'blocked', 'disabled', 'unavailable'):
+            self.profile_recognition_active = False
+
+    def _update_recognition_countdown(self):
+        if not self.profile_recognition_active or self.profile_recognition_stage not in ('waiting', 'error'):
+            return
+        remaining = max(0, int(self.next_ai-time.monotonic()+0.999))
+        if remaining:
+            minutes, seconds = divmod(remaining, 60)
+            wait = f'{minutes}分{seconds:02d}秒' if minutes else f'{seconds}秒'
+            suffix = f' · 下一批约 {wait} 后开始'
+        else:
+            suffix = ' · 下一批即将开始'
+        self.profile_recognition_detail.setText(self.profile_recognition_base_detail + suffix)
+
+    def _apply_recognition_progress(self, progress):
+        total = int(progress.get('total', 0))
+        ai_count = int(progress.get('ai', 0))
+        ai_supported = int(progress.get('ai_supported', ai_count))
+        ai_classified = int(progress.get('ai_classified', ai_supported))
+        local_count = int(progress.get('local', 0))
+        pending = int(progress.get('pending', 0))
+        queued = int(progress.get('queued', pending))
+        batch = int(progress.get('batch_count', 0))
+        rejected = int(progress.get('rejected_count', 0))
+        stage = progress.get('stage', 'waiting')
+        if stage == 'complete' and total == 0:
+            detail = '没有符合当前授权范围的待识别活动。'
+        else:
+            detail = f'共 {total} 段 · AI 已分类 {ai_classified} 段（明确 {ai_supported} 段） · 规则/案例识别 {local_count} 段 · 等待识别 {queued} 段 · 仍需确认 {pending} 段'
+            if batch:
+                detail += f'；本批新增 {batch} 段'
+            if rejected:
+                detail += f'；本批 {rejected} 段返回未匹配现有分类，已保留待确认'
+        if stage == 'paused':
+            detail += '；记录处于暂停或空闲状态，恢复后继续。'
+        elif stage == 'unavailable':
+            detail += '；剩余活动缺少可用文本证据，暂时无法提交。'
+        elif stage == 'error':
+            detail += '；' + progress.get('message','稍后会自动重试。')
+        self._set_profile_recognition(stage, detail, progress)
+        if stage in ('complete', 'blocked', 'disabled', 'unavailable'):
+            self.profile_recognition_active = False
 
     def rule_dialog(self):
         from .learning_widgets import RulesDialog, rule_rows
@@ -939,24 +1090,78 @@ class DiaryMainWindow(QMainWindow):
 
     def set_key(self):
         from .dialog_kit import add_field, add_footer, make_dialog
-        dialog, body, footer = make_dialog(self, '设置服务密钥', 460, '密钥仅写入 Windows Credential Manager，不会出现在日记数据里。')
+        detail = (
+            '当前服务已有密钥。为安全起见不会回显；如需更换，请粘贴新密钥。'
+            if self._key_available is True
+            else '密钥仅写入 Windows Credential Manager，不会出现在日记数据里。'
+        )
+        dialog, body, footer = make_dialog(self, '设置服务密钥', 460, detail)
         entry = QLineEdit()
         entry.setEchoMode(QLineEdit.EchoMode.Password)
-        entry.setPlaceholderText('粘贴服务密钥')
+        entry.setPlaceholderText('粘贴新密钥以替换' if self._key_available is True else '粘贴服务密钥')
         add_field(body, '服务密钥', entry)
         endpoint = self.endpoint.text().strip()
 
         def save():
-            key = entry.text()
+            key = entry.text().strip()
+            if not key:
+                QMessageBox.information(dialog, '未保存', '请输入服务密钥。')
+                return
             entry.clear()
             dialog.accept()
-            self.run_job(lambda m: Vault(endpoint).put(key))
+            def saved(_result):
+                self._set_key_status(True)
+                self.ai_note.setText('服务密钥已保存；可以开启后台 AI 分析。')
+                QMessageBox.information(self, '密钥已保存', '服务密钥已安全保存到 Windows Credential Manager。')
+            self.run_job(lambda m: Vault(endpoint).put(key), saved)
 
         add_footer(footer, '保存密钥', dialog, accept_slot=save)
         dialog.exec()
 
     def delete_key(self):
-        self.run_job(lambda m: Vault(self.endpoint.text().strip()).delete())
+        endpoint = self.endpoint.text().strip()
+        def deleted(_result):
+            self._set_key_status(False)
+            self.ai_note.setText('服务密钥已删除；后台 AI 将无法发送请求。')
+            QMessageBox.information(self, '密钥已删除', '当前模型服务的密钥已从 Windows Credential Manager 删除。')
+        self.run_job(lambda m: Vault(endpoint).delete(), deleted)
+
+    def _set_key_status(self, available, text=None):
+        self._key_available = available
+        state = 'checking' if available is None else ('saved' if available else 'missing')
+        if text is None:
+            text = {
+                'checking': '○ 正在检查密钥状态…',
+                'saved': '● 密钥已保存 · 为安全起见不会显示密钥内容',
+                'missing': '○ 尚未保存当前服务的密钥',
+            }[state]
+        self.key_status.setText(text)
+        self.key_status.setProperty('keyState', state)
+        self.key_status.style().unpolish(self.key_status)
+        self.key_status.style().polish(self.key_status)
+
+    def refresh_key_status(self, endpoint=None):
+        endpoint = (endpoint or self.endpoint.text()).strip()
+        if self.preview_mode:
+            self._set_key_status(None, '○ 合成预览不读取系统密钥状态')
+            return
+        self._set_key_status(None)
+
+        def check(_memory):
+            try:
+                return Vault(endpoint).available()
+            except Exception:
+                return None
+
+        def checked(available):
+            if endpoint != self.endpoint.text().strip():
+                return
+            if available is None:
+                self._set_key_status(None, '○ 暂时无法检查 Windows Credential Manager')
+            else:
+                self._set_key_status(available)
+
+        self.run_job(check, checked, quiet=True)
 
     def _update_capture_chrome(self, state: str) -> None:
         self.recording = state
@@ -1069,6 +1274,7 @@ class DiaryMainWindow(QMainWindow):
     def _run_ai_tick(self) -> None:
         if self.closed or self.preview_mode:
             return
+        self._update_recognition_countdown()
         if self.ai_future and self.ai_future.done():
             try:
                 result = self.ai_future.result()
@@ -1076,14 +1282,24 @@ class DiaryMainWindow(QMainWindow):
                     self.ai_note.setText(result['note'])
                 if result.get('cooldown'):
                     self.next_ai = time.monotonic() + result['cooldown']
+                elif result.get('recognition'):
+                    delay = (SUCCESS_BATCH_DELAY_SECONDS if result['recognition'].get('queued', 0)
+                        else IDLE_AI_POLL_SECONDS)
+                    self.next_ai = time.monotonic() + delay
+                if self.profile_recognition_active and result.get('recognition'):
+                    self._apply_recognition_progress(result['recognition'])
             except Exception:
                 self.ai_note.setText('后台整理暂不可用，原始记录已保留。')
+                if self.profile_recognition_active:
+                    self._set_profile_recognition('error', '后台识别暂不可用，原始活动记录已保留。')
             self.ai_future = None
         if self.ai_future is None and not self.busy and not self.preview_mode:
             self.ai_cancel = threading.Event()
             analyze = time.monotonic() >= self.next_ai
             if analyze:
-                self.next_ai = time.monotonic() + 60
+                self.next_ai = time.monotonic() + IDLE_AI_POLL_SECONDS
+                if self.profile_recognition_active:
+                    self._set_profile_recognition('running', '正在读取证据并处理当前批次；活动正文不会显示在进度中。')
             cancel = self.ai_cancel
 
             def work():

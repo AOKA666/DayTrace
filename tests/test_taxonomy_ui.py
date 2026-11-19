@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QLineEdit, QPushButton
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QLineEdit, QMessageBox, QPushButton
 from daytrace.personalization.store import Memory
 from daytrace.personalization.diary_qt.window import run_app
 from daytrace.personalization.diary_qt.dialogs import ConfirmDialog
@@ -16,6 +16,107 @@ from daytrace.domain import Observation
 
 
 class TaxonomyUiTests(unittest.TestCase):
+    def test_setting_key_reports_saved_without_echoing_secret(self):
+        self.window._set_key_status(True)
+        cleared = []
+
+        def enter_key(dialog):
+            entry = dialog.findChild(QLineEdit)
+            self.assertEqual(entry.text(), '')
+            self.assertIn('替换', entry.placeholderText())
+            entry.setText('synthetic-key')
+            next(b for b in dialog.findChildren(QPushButton) if b.text() == '保存密钥').click()
+            cleared.append(entry.text())
+            return QDialog.DialogCode.Accepted
+
+        with patch.object(QDialog, 'exec', enter_key), \
+             patch('daytrace.personalization.diary_qt.window.Vault.put') as put, \
+             patch.object(QMessageBox, 'information') as information:
+            self.window.set_key()
+            self.wait_jobs()
+        put.assert_called_once_with('synthetic-key')
+        self.assertEqual(cleared, [''])
+        self.assertIn('密钥已保存', self.window.key_status.text())
+        self.assertIn('不会显示', self.window.key_status.text())
+        information.assert_called_once()
+
+    def test_retry_ai_reports_missing_key_instead_of_claiming_retry(self):
+        from daytrace.preferences import save_options
+        save_options(self.path, auto_ai=True, ai_endpoint='https://example.invalid/chat')
+        with patch('daytrace.personalization.diary_qt.window.Vault.available', return_value=False):
+            self.assertFalse(self.window.retry_ai())
+        self.assertIn('缺少服务密钥', self.window.ai_note.text())
+
+    def test_profile_can_save_and_request_recognition_without_switching_sections(self):
+        self.window.description.setPlainText('Synthetic daily profile')
+        button = next(b for b in self.window.findChildren(QPushButton)
+                      if b.text() == '保存并识别待识别活动')
+        with patch.object(self.window, 'retry_ai', return_value=True) as retry:
+            button.click()
+            self.wait_jobs()
+        retry.assert_called_once_with(notify=True)
+        memory = Memory(self.path)
+        try:
+            self.assertEqual(memory.profile()['description'], 'Synthetic daily profile')
+        finally:
+            memory.close()
+        self.assertIn('已安排重新识别', self.window.profile_note.text())
+
+    def test_profile_recognition_progress_shows_real_counts(self):
+        self.window.profile_recognition_active = True
+        self.window.next_ai = 160
+        with patch('daytrace.personalization.diary_qt.window.time.monotonic', return_value=100):
+            self.window._apply_recognition_progress({
+                'stage': 'waiting', 'total': 8, 'ai': 3, 'ai_supported': 1, 'ai_classified': 3, 'local': 2,
+                'pending': 3, 'queued': 3, 'batch_count': 3,
+            })
+        self.assertEqual(self.window.profile_recognition_bar.maximum(), 8)
+        self.assertEqual(self.window.profile_recognition_bar.value(), 5)
+        self.assertIn('AI 已分类 3 段（明确 1 段）', self.window.profile_recognition_detail.text())
+        self.assertIn('等待识别 3 段', self.window.profile_recognition_detail.text())
+        self.assertIn('仍需确认 3 段', self.window.profile_recognition_detail.text())
+        self.assertIn('下一批约 1分00秒 后开始', self.window.profile_recognition_detail.text())
+        with patch('daytrace.personalization.diary_qt.window.time.monotonic', return_value=159.2):
+            self.window._update_recognition_countdown()
+        self.assertIn('下一批约 1秒 后开始', self.window.profile_recognition_detail.text())
+        self.window._apply_recognition_progress({
+            'stage': 'complete', 'total': 8, 'ai': 6, 'ai_supported': 4, 'ai_classified': 6, 'local': 2,
+            'pending': 0, 'queued': 0, 'batch_count': 3,
+        })
+        self.assertEqual(self.window.profile_recognition_status.text(), '识别完成')
+        self.assertFalse(self.window.profile_recognition_active)
+
+    def test_profile_recognition_reports_rejected_items_without_losing_batch(self):
+        self.window.profile_recognition_active = True
+        self.window._apply_recognition_progress({
+            'stage':'complete','total':4,'ai':3,'ai_supported':2,'ai_classified':3,'local':0,
+            'pending':2,'queued':0,'batch_count':3,'rejected_count':1,
+        })
+        self.assertIn('本批 1 段返回未匹配现有分类',self.window.profile_recognition_detail.text())
+
+    def test_successful_batches_continue_quickly_but_idle_and_failures_wait(self):
+        class Completed:
+            def __init__(self,result):self._result=result
+            def done(self):return True
+            def result(self):return self._result
+
+        def finish(result):
+            self.window.ai_future=Completed(result)
+            self.window.busy=True
+            self.window.preview_mode=False
+            try:
+                with patch('daytrace.personalization.diary_qt.window.time.monotonic',return_value=100):
+                    self.window._run_ai_tick()
+                return self.window.next_ai
+            finally:
+                self.window.preview_mode=True
+                self.window.busy=False
+                self.window.ai_future=None
+
+        self.assertEqual(finish({'recognition':{'queued':5}}),103)
+        self.assertEqual(finish({'recognition':{'queued':0}}),160)
+        self.assertEqual(finish({'recognition':{'queued':5},'cooldown':300}),400)
+
     def test_close_does_not_save_capture_draft_and_model_save_persists(self):
         from daytrace.preferences import options
         self.window.model.setText('saved-model')

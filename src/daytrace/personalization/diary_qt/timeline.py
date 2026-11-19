@@ -86,7 +86,7 @@ class ActivityCard(QFrame):
         self.footer.setVisible(bool(footer))
         category = card.get('category') or ''
         categorized = active and not pending and category and category != '待确认' and all(
-            row.get('manual') or (row.get('source') == 'rule' and row.get('reliability') == 'supported')
+            row.get('manual') or (row.get('source') in ('rule','ai') and row.get('reliability') == 'supported')
             for row in card['rows'])
         self.marker_color = QColor(category_color(category, colors)) if categorized else None
         self.update()

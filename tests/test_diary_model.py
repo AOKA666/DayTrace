@@ -59,6 +59,20 @@ class DiaryModelTests(unittest.TestCase):
         self.assertTrue(items[0]['review'])
         self.assertIn('待确认', items[0]['status'])
 
+    def test_supported_ai_category_is_automatic_not_pending(self):
+        rows = [_row(source='ai', reliability='supported', manual=0, category='工作')]
+        item = cards(rows)[0]
+        self.assertFalse(item['review'])
+        self.assertEqual(item['category'], '工作')
+        self.assertEqual(item['status'], 'AI 自动分类')
+
+    def test_tentative_ai_category_is_visible_without_confirmation_queue(self):
+        rows = [_row(source='ai', reliability='tentative', manual=0, category='工作', disposition='auto_tentative')]
+        item = cards(rows)[0]
+        self.assertFalse(item['review'])
+        self.assertEqual(item['category'], '工作')
+        self.assertEqual(item['status'], 'AI 推测分类')
+
     def test_active_without_task_label_shows_window_title(self):
         rows = [
             _row(

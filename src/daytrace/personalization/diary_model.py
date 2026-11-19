@@ -74,8 +74,8 @@ def cards(rows):
         result.append(dict(key=key, start_ms=row['start_ms'], end_ms=row['end_ms'], rows=[row],
             title=label, category=row.get('category') or ('待确认' if active else ''), project=row.get('project') or '',
             description=description, tags=row.get('tags', []),
-            review=active and row.get('reliability') != 'supported' and row.get('disposition') != 'ignore',
-            status='已确认' if row.get('manual') else 'AI 建议 · 待确认' if row.get('source') == 'ai' else '规则识别' if row.get('source') == 'rule' else '待确认' if active else ''))
+            review=active and row.get('reliability') != 'supported' and row.get('disposition') not in ('ignore','auto_tentative'),
+            status='已确认' if row.get('manual') else 'AI 自动分类' if row.get('source') == 'ai' and row.get('reliability') == 'supported' else 'AI 推测分类' if row.get('source') == 'ai' and row.get('disposition') == 'auto_tentative' else 'AI 建议 · 待确认' if row.get('source') == 'ai' else '规则识别' if row.get('source') == 'rule' else '待确认' if active else ''))
     return result
 
 

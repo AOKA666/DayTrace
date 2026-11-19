@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from daytrace.personalization.provider import TextProvider, Vault, NoRedirect, DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL
+from daytrace.personalization.provider import TextProvider, Vault, NoRedirect, DEEPSEEK_ENDPOINT, DEEPSEEK_MODEL, IncompleteResponseError
 
 
 class ProviderTests(unittest.TestCase):
@@ -72,12 +72,18 @@ class ProviderTests(unittest.TestCase):
                     self.assertIn('max_completion_tokens', body)
                     self.assertNotIn('thinking', body)
                 else:
-                    self.assertEqual(body['max_tokens'], 2000)
+                    self.assertEqual(body['max_tokens'], 4000)
                     self.assertEqual(body['thinking'], {'type': 'disabled'})
                     self.assertFalse(body['stream'])
                     self.assertNotIn('max_completion_tokens', body)
                     self.assertNotIn('store', body)
                     self.assertEqual(body['response_format'], {'type': 'json_object'})
+
+    def test_incomplete_response_has_distinct_safe_error(self):
+        provider = self.provider(budget=1)
+        response = io.BytesIO(json.dumps({'choices':[{'finish_reason':'length','message':{'content':'{}'}}]}).encode())
+        with patch.object(provider.opener,'open',return_value=response):
+            with self.assertRaises(IncompleteResponseError):provider.classify(self.payload())
 
     def test_inflight_cancel_drops_response(self):
         provider = self.provider()
@@ -96,8 +102,10 @@ class ProviderTests(unittest.TestCase):
         value = 'synthetic-test-value-' + str(uuid.uuid4())
         try:
             vault.put(value)
+            self.assertTrue(vault.available())
             self.assertEqual(vault.get(), value)
         finally:
             vault.delete()
+        self.assertFalse(vault.available())
         with self.assertRaises(RuntimeError):
             vault.get()
