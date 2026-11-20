@@ -179,10 +179,6 @@ class DiaryMainWindow(QMainWindow):
         self.capture_button.setFixedHeight(capture_height)
         self.capture_state.setFixedHeight(capture_height)
         top.addWidget(self.capture_button, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.idle_button = QPushButton('开始空闲')
-        self.idle_button.clicked.connect(self.toggle_idle)
-        self.idle_button.setEnabled(False)
-        top.addWidget(self.idle_button, 0, Qt.AlignmentFlag.AlignVCenter)
         main.addLayout(top)
 
         tool = QHBoxLayout()
@@ -1171,18 +1167,6 @@ class DiaryMainWindow(QMainWindow):
         self.capture_state.style().polish(self.capture_state)
         self.capture_state.setAccessibleName(self.capture_state.text())
         self.capture_button.setText({'idle': '暂停记录', 'running': '暂停', 'paused': '恢复', 'stopped': '开始记录'}[state])
-        self.idle_button.setText('结束空闲' if state == 'idle' else '开始空闲')
-        self.idle_button.setEnabled(state in ('running', 'idle') and not self.preview_mode)
-
-    def toggle_idle(self):
-        if self.preview_mode or self.busy:
-            return
-        state = self._sync_capture_state_blocking()
-        if state not in ('running', 'idle'):
-            return
-        from ...cli import control
-        command = 'resume' if state == 'idle' else 'idle'
-        self.run_job(lambda _: control(self.database, command), lambda _: (self._sync_capture_state_blocking(), self.refresh()))
 
     def _apply_capture_state(self, state: str) -> None:
         self._update_capture_chrome(state)

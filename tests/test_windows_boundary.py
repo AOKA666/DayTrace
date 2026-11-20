@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from daytrace.windows import WindowsAPI
+from daytrace.windows import WindowsAPI, transient_file_dialog
 
 
 class FakeKernel:
@@ -30,6 +30,7 @@ class FakeUser:
     def __init__(self):
         self.title_reads = 0
         self.current = 12
+        self.window_class = 'EditorWindow'
         self.switch_during_title = False
         self.reuse_pid = False
         self.pid_reads = 0
@@ -47,6 +48,10 @@ class FakeUser:
         buffer.value = "Synthetic password=hidden"
         if self.switch_during_title:
             self.current = 13
+        return len(buffer.value)
+
+    def GetClassNameW(self, hwnd, buffer, length):
+        buffer.value = self.window_class
         return len(buffer.value)
 
 
@@ -111,6 +116,32 @@ class WindowsBoundaryTests(unittest.TestCase):
         self.assertEqual(result.state,'excluded')
         self.assertIsNone(result.title)
         self.assertIsNone(result.process_name)
+
+    def test_standard_file_dialog_is_anonymous_unknown(self):
+        self.api.u.window_class = '#32770'
+        for title in ('另存为', '打开', 'Select files', 'Save As'):
+            with self.subTest(title=title):
+                self.api.u.GetWindowTextW = lambda hwnd, buffer, length, value=title: (
+                    setattr(buffer, 'value', value) or len(value)
+                )
+                result = self.api.snapshot([])
+                self.assertEqual(result.state, 'unknown')
+                self.assertIsNone(result.title)
+                self.assertIsNone(result.process_name)
+
+    def test_same_title_in_normal_application_is_not_filtered(self):
+        self.api.u.window_class = 'Chrome_WidgetWin_1'
+        self.api.u.GetWindowTextW = lambda hwnd, buffer, length: (
+            setattr(buffer, 'value', '打开') or 2
+        )
+        result = self.api.snapshot([])
+        self.assertEqual(result.state, 'active')
+        self.assertEqual(result.title, '打开')
+
+    def test_transient_file_dialog_match_is_exact_and_class_scoped(self):
+        self.assertTrue(transient_file_dialog('#32770', '  Select   files  '))
+        self.assertFalse(transient_file_dialog('Chrome_WidgetWin_1', 'Select files'))
+        self.assertFalse(transient_file_dialog('#32770', 'OpenAI settings'))
 
 
 if __name__ == "__main__":

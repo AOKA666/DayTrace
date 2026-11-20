@@ -12,6 +12,21 @@ from .privacy import app_identity, excluded, redact_title
 from .content.policy import SENSITIVE_APPS, sensitive_window
 
 
+TRANSIENT_FILE_DIALOG_TITLES = frozenset({
+    'open', 'save as', 'select file', 'select files', 'select a file',
+    'select one or more files', 'select file to upload', 'choose file',
+    'choose files', 'browse for folder',
+    '打开', '另存为', '选择文件', '选择一个文件', '选择多个文件',
+    '选择要上传的文件', '选择文件夹', '浏览文件夹',
+})
+
+
+def transient_file_dialog(window_class: str, title: str) -> bool:
+    """Recognize only standard Windows file pickers, not similarly named pages."""
+    normalized = ' '.join((title or '').split()).strip(' .…').casefold()
+    return (window_class or '').casefold() == '#32770' and normalized in TRANSIENT_FILE_DIALOG_TITLES
+
+
 class WindowsAPI:
     def __init__(self):
         if os.name != "nt":
@@ -22,6 +37,7 @@ class WindowsAPI:
         self._bind(self.u, "GetForegroundWindow", [], w.HWND)
         self._bind(self.u, "GetWindowThreadProcessId", [w.HWND, c.POINTER(w.DWORD)], w.DWORD)
         self._bind(self.u, "GetWindowTextW", [w.HWND, w.LPWSTR, c.c_int], c.c_int)
+        self._bind(self.u, "GetClassNameW", [w.HWND, w.LPWSTR, c.c_int], c.c_int)
         self._bind(self.k, "OpenProcess", [w.DWORD, w.BOOL, w.DWORD], w.HANDLE)
         self._bind(self.k, "CloseHandle", [w.HANDLE], w.BOOL)
         self._bind(self.k, "QueryFullProcessImageNameW", [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)], w.BOOL)
@@ -84,13 +100,19 @@ class WindowsAPI:
         if self.u.GetForegroundWindow() != hwnd:
             return Observation("unknown")
         title = c.create_unicode_buffer(2049)
+        window_class = c.create_unicode_buffer(257)
         if read_title:
             self.u.GetWindowTextW(hwnd, title, len(title))
             if sensitive_window(title.value, getattr(self, 'excluded_windows', ())):
                 return Observation("excluded")
+            self.u.GetClassNameW(hwnd, window_class, len(window_class))
         after_pid = w.DWORD()
         self.u.GetWindowThreadProcessId(hwnd, c.byref(after_pid))
         if self.u.GetForegroundWindow() != hwnd or after_pid.value != pid.value or not self.desktop_available():
+            return Observation("unknown")
+        if read_title and transient_file_dialog(window_class.value, title.value):
+            # Preserve only an anonymous boundary. Do not persist the dialog title,
+            # owning process or a misleading task such as "Open" / "Save As".
             return Observation("unknown")
         return Observation("active", ntpath.basename(executable), app_identity(executable), redact_title(title.value), hwnd)
 

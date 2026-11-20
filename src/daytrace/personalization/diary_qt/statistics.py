@@ -8,6 +8,70 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QB
 from ..category_palette import category_color
 from ..diary_model import duration
 
+BUCKET_MINUTES = 5
+
+
+def _clock_interval(row, half):
+    start_dt = datetime.fromtimestamp(row['start_ms']/1000)
+    end_dt = datetime.fromtimestamp(row['end_ms']/1000)
+    start = start_dt.hour*60+start_dt.minute+start_dt.second/60
+    end = 1440 if end_dt.date()>start_dt.date() else end_dt.hour*60+end_dt.minute+end_dt.second/60
+    lo=max(half*720,start);hi=min((half+1)*720,end)
+    return lo,hi
+
+
+def aggregate_clock(rows, half, bucket_minutes=BUCKET_MINUTES):
+    """Build a legible visual summary without changing source intervals."""
+    half_start=half*720
+    bucket_count=720//bucket_minutes
+    clipped=[]
+    for row in rows:
+        lo,hi=_clock_interval(row,half)
+        if hi>lo:
+            clipped.append((row,lo,hi))
+    buckets=[]
+    for index in range(bucket_count):
+        lo=half_start+index*bucket_minutes;hi=lo+bucket_minutes
+        by_category=defaultdict(float)
+        for row,start,end in clipped:
+            overlap=max(0.,min(hi,end)-max(lo,start))
+            if overlap:
+                by_category[row.get('category') or '待确认']+=overlap
+        buckets.append(max(by_category.items(),key=lambda item:(item[1],item[0]))[0] if by_category else None)
+    spans=[]
+    for index,category in enumerate(buckets):
+        lo=half_start+index*bucket_minutes;hi=lo+bucket_minutes
+        if spans and spans[-1]['category']==category and spans[-1]['end']==lo:
+            spans[-1]['end']=hi
+        else:
+            spans.append({'category':category,'start':lo,'end':hi})
+    spans=[span for span in spans if span['category'] is not None]
+    return spans
+
+
+def half_totals(rows,half):
+    totals=defaultdict(float)
+    for row in rows:
+        lo,hi=_clock_interval(row,half)
+        if hi>lo:
+            totals[row.get('category') or '待确认']+=(hi-lo)*60_000
+    return sorted(totals.items(),key=lambda item:-item[1])
+
+
+def legend_items(totals,limit=8):
+    if len(totals)<=limit:
+        return [(name,value,False) for name,value in totals]
+    visible=[(name,value,False) for name,value in totals[:limit-1]]
+    remainder=totals[limit-1:]
+    visible.append((f'其他 {len(remainder)} 类',sum(value for _,value in remainder),True))
+    return visible
+
+
+def clock_label(minutes):
+    value=max(0,min(1440,round(minutes)))
+    if value==1440:return '24:00'
+    return f'{value//60:02d}:{value%60:02d}'
+
 
 def summarize(cards):
     rows = {}
@@ -27,6 +91,7 @@ class Statistics(QWidget):
         self.rows, self.totals, self.colors = [], [], {}
         self.half = 0
         self.hover = -1
+        self.hover_span = None
         self.offset = 0.
         self.animation = QVariantAnimation(self)
         self.animation.setDuration(140)
@@ -63,6 +128,11 @@ class Statistics(QWidget):
     def set_half(self, half):
         self.half = half
         self.buttons[half].setChecked(True)
+        self.hover=-1
+        self.hover_span=None
+        self.animation.stop()
+        self.offset=0
+        QToolTip.hideText()
         self.update()
 
     def geometry_values(self):
@@ -82,8 +152,19 @@ class Statistics(QWidget):
             self.animation.stop()
             self.offset = 0
             QToolTip.hideText()
-        self.setMinimumHeight(max(700, 570+len(self.totals)*62))
+        self.setMinimumHeight(max(810, 680+len(self.totals)*62))
         self.update()
+
+    def hit_clock(self,point):
+        lx,_,cy,radius=self.geometry_values()
+        dx,dy=point.x()-lx,point.y()-cy
+        if hypot(dx,dy)>radius-6:
+            return None
+        minute=self.half*720+(atan2(dx,-dy)%(2*pi))/(2*pi)*720
+        for span in aggregate_clock(self.rows,self.half):
+            if span['start']<=minute<span['end']:
+                return span
+        return None
 
     def hit_sector(self, point):
         _, cx, cy, radius = self.geometry_values()
@@ -101,21 +182,34 @@ class Statistics(QWidget):
 
     def mouseMoveEvent(self, event):
         index=self.hit_sector(event.position())
+        span=None
+        if index<0:
+            span=self.hit_clock(event.position())
+            if span:
+                index=next((i for i,(name,_) in enumerate(self.totals) if name==span['category']),-1)
         if index!=self.hover:
             self.hover=index
             self.animation.stop()
             self.animation.setStartValue(0.)
             self.animation.setEndValue(7. if index>=0 else 0.)
             self.animation.start()
-        if index>=0:
+        self.hover_span=span
+        if span:
+            count=sum(1 for row in self.rows if (row.get('category') or '待确认')==span['category']
+                and min(_clock_interval(row,self.half)[1],span['end'])>max(_clock_interval(row,self.half)[0],span['start']))
+            QToolTip.showText(event.globalPosition().toPoint(),
+                f"{span['category']}\n{clock_label(span['start'])}–{clock_label(span['end'])} · {duration((span['end']-span['start'])*60_000)}\n包含 {count} 段记录",self)
+        elif index>=0:
             category,value=self.totals[index]
-            QToolTip.showText(event.globalPosition().toPoint(), f'{category}\n{duration(value)} · {value/sum(v for _,v in self.totals):.1%}',self)
+            count=sum(1 for row in self.rows if (row.get('category') or '待确认')==category)
+            QToolTip.showText(event.globalPosition().toPoint(), f'{category}\n{duration(value)} · {value/sum(v for _,v in self.totals):.1%}\n包含 {count} 段记录',self)
         else:
             QToolTip.hideText()
         self.update()
 
     def leaveEvent(self,event):
         self.hover=-1
+        self.hover_span=None
         self.animation.stop()
         self.offset=0
         QToolTip.hideText()
@@ -138,17 +232,14 @@ class Statistics(QWidget):
         text(QRectF(w/2+32,12,w/2-60,38),'全天统计',18,'#86868B')
         clock=QRectF(lx-r+6,cy-r+6,2*r-12,2*r-12)
         p.setPen(QPen(QColor('#E5E7EB'),2));p.drawEllipse(clock)
-        for row in self.rows:
-            a=datetime.fromtimestamp(row['start_ms']/1000);b=datetime.fromtimestamp(row['end_ms']/1000)
-            start=a.hour*60+a.minute+a.second/60
-            end=1440 if b.date()>a.date() else b.hour*60+b.minute+b.second/60
-            lo=max(self.half*720,start);hi=min((self.half+1)*720,end)
-            if hi>lo:
-                p.setPen(Qt.PenStyle.NoPen)
-                shade=color(row.get('category') or '待确认')
-                shade.setAlpha(150)
-                p.setBrush(shade)
-                p.drawPie(clock,round((90-(lo%720)/2)*16),round(-(hi-lo)/2*16))
+        clock_spans=aggregate_clock(self.rows,self.half)
+        hovered_category=self.totals[self.hover][0] if 0<=self.hover<len(self.totals) else None
+        for span in clock_spans:
+            p.setPen(Qt.PenStyle.NoPen)
+            shade=color(span['category'])
+            shade.setAlpha(245 if hovered_category==span['category'] else 55 if hovered_category else 215)
+            p.setBrush(shade)
+            p.drawPie(clock,round((90-(span['start']%720)/2)*16),round(-(span['end']-span['start'])/2*16))
         p.setBrush(Qt.BrushStyle.NoBrush)
         for tick in range(60):
             angle=tick*pi/30
@@ -174,7 +265,22 @@ class Statistics(QWidget):
                 shade=shade.lighter(110)
             pen=QPen(shade,42);pen.setCapStyle(Qt.PenCapStyle.FlatCap);p.setPen(pen);p.drawArc(rect,round(angle*16),-round(span*16));angle-=span
         text(QRectF(rx-r+46,cy-25,2*r-92,50),duration(total),24,align=Qt.AlignmentFlag.AlignCenter,bold=True)
-        y=cy+r+85
+        legend_top=cy+r+72
+        for index,(category,value) in enumerate(half_totals(self.rows,self.half)[:3]):
+            top=legend_top+index*27
+            p.setPen(Qt.PenStyle.NoPen);p.setBrush(color(category));p.drawEllipse(QRectF(lx-r+2,top+8,8,8))
+            text(QRectF(lx-r+18,top,r*1.25,24),category,13)
+            text(QRectF(lx+45,top,r-45,24),duration(value),13,'#86868B',Qt.AlignmentFlag.AlignRight)
+        legend=legend_items(self.totals)
+        cell_w=r-4
+        for index,(category,value,grouped) in enumerate(legend):
+            column=index%2;row=index//2
+            left=rx-r+column*(cell_w+8);top=legend_top+row*27
+            shade=QColor('#B8BCC6') if grouped else color(category)
+            p.setPen(Qt.PenStyle.NoPen);p.setBrush(shade);p.drawEllipse(QRectF(left,top+8,8,8))
+            text(QRectF(left+15,top,cell_w-58,24),category,12)
+            text(QRectF(left+cell_w-42,top,40,24),f'{value/total:.0%}' if total else '0%',12,'#86868B',Qt.AlignmentFlag.AlignRight)
+        y=cy+r+215
         p.setPen(QPen(QColor('#EDEEF2'),1));p.drawLine(QPointF(12,y),QPointF(w-12,y))
         text(QRectF(16,y+16,150,36),'时间排行',22,bold=True)
         text(QRectF(160,y+16,w-180,36),'全天 · 按记录时长从高到低排序',13,'#86868B')

@@ -10,30 +10,22 @@ DIARY_QT = Path(__file__).resolve().parents[1] / 'src' / 'daytrace' / 'personali
 
 
 class DiaryQtTests(unittest.TestCase):
-    def test_idle_control_tracks_session_and_sends_start_end(self):
+    def test_manual_idle_button_is_removed_but_automatic_idle_state_remains_visible(self):
         import tempfile
-        from unittest.mock import patch
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QPushButton
         from daytrace.personalization.diary_qt.window import DiaryMainWindow
         app = QApplication.instance() or QApplication([])
         with tempfile.TemporaryDirectory() as folder:
             window = DiaryMainWindow(Path(folder) / 'test.sqlite3', preview_mode=True)
             try:
-                window.preview_mode = False
-                window.busy = False
-                window.run_job = lambda work, done: work(None)
-                with patch('daytrace.personalization.diary_qt.window.read_capture_state', return_value='running'), patch('daytrace.cli.control') as control:
-                    window.toggle_idle()
-                    control.assert_called_once_with(window.database, 'idle')
-                    self.assertTrue(window.idle_button.isEnabled())
-                with patch('daytrace.personalization.diary_qt.window.read_capture_state', return_value='idle'), patch('daytrace.cli.control') as control:
-                    window.toggle_idle()
-                    control.assert_called_once_with(window.database, 'resume')
-                    self.assertEqual(window.idle_button.text(), '结束空闲')
-                window._update_capture_chrome('stopped')
-                self.assertFalse(window.idle_button.isEnabled())
+                labels = [button.text() for button in window.findChildren(QPushButton)]
+                self.assertNotIn('开始空闲', labels)
+                self.assertNotIn('结束空闲', labels)
+                self.assertFalse(hasattr(window, 'idle_button'))
+                window._update_capture_chrome('idle')
+                self.assertIn('正在空闲', window.capture_state.text())
+                self.assertEqual(window.capture_button.text(), '暂停记录')
             finally:
-                window.preview_mode = True
                 window.close()
                 window.executor.shutdown(wait=True, cancel_futures=True)
                 window.ai_executor.shutdown(wait=True, cancel_futures=True)
